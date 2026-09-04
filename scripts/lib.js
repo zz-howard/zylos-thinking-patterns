@@ -27,9 +27,13 @@ export const DEFAULT_CONFIG = {
   min_conversations: 30,
   max_conversations: 300,
   default_lookback: '24h',
-  patterns_file: '~/zylos/memory/thinking-patterns.md',
   c4_db_cli: '~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js'
 };
+
+// Channels that never carry the subject's judgment: scheduler/system notices
+// and the agent's own void memos. Owners can override in the policy.
+export const DEFAULT_EXCLUDE_CHANNELS = ['system', 'void'];
+export const DEFAULT_POLICY = 'default';
 
 export const DEFAULT_STATE = {
   schema_version: 2,
@@ -57,10 +61,22 @@ Whose or what decision patterns should be extracted? One of:
 
 Subject: (fill in)
 
+## Target
+
+Which file the patterns are written to. Only this file is ever modified, and
+only by appending. An existing file in the entry format is picked up as-is.
+
+Patterns file: (fill in, e.g. ~/zylos/memory/thinking-patterns.md)
+
 ## Sources
 
-Which conversation streams count? All channels by default. Name channels or
-groups to focus on, and any to ignore (for example, small talk channels).
+Which conversation streams count? The two lines below are applied by the
+fetch step as a coarse filter on the C4 \`channel\` field (a comma-separated
+list, or "all"); everything finer — which groups, which topics, what to
+ignore — is written in plain language for the agent to judge.
+
+Channels: all
+Exclude channels: system, void
 
 Sources: (fill in, or "all")
 
@@ -114,8 +130,58 @@ export function parseDuration(value) {
 export const SCHEDULE_QUESTIONS = [
   'How often should it run? (a cron expression in the scheduler timezone; nightly after the working day is typical)',
   'How far back should each run look? (the lookback, e.g. 24h or 7d; default = the run interval. Shorter than the interval leaves gaps; longer overlaps, which is harmless because the methodology de-duplicates against the pattern file)',
-  'A short task name, only when this is not the first scheduled task (e.g. daily, weekly) — several tasks may run with different lookbacks; they share the one policy and pattern file'
+  'A short task name, only when this is not the first scheduled task (e.g. daily, weekly) — several tasks may run with different lookbacks against the same policy; and, when more than one policy file exists (policy.md, policy-<name>.md, one per subject), which policy this task uses'
 ];
+
+export function normalizePolicyName(value) {
+  if (value === undefined || value === null || value === true || value === '') return DEFAULT_POLICY;
+  const name = String(value).trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(name)) {
+    throw new Error(`Invalid policy name: "${value}" (letters, digits, - and _, up to 32 chars)`);
+  }
+  return name;
+}
+
+export function policyPath(policy = DEFAULT_POLICY) {
+  return policy === DEFAULT_POLICY ? POLICY_PATH : path.join(DATA_DIR, `policy-${policy}.md`);
+}
+
+const PLACEHOLDER = /^\(fill in/i;
+
+function policyLine(text, label) {
+  const match = text.match(new RegExp(`^${label}:[ \\t]*(.*)$`, 'mi'));
+  if (!match) return null;
+  const value = match[1].trim();
+  return value === '' || PLACEHOLDER.test(value) ? null : value;
+}
+
+// null / "all" → null (no restriction); "none" → []; otherwise a list.
+function channelList(value) {
+  if (value === null || /^all$/i.test(value)) return null;
+  if (/^none$/i.test(value)) return [];
+  return value.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+// Machine-readable lines of an owner policy. Everything else in the file is
+// prose for the agent. `channels` null = all; `exclude_channels` defaults to
+// DEFAULT_EXCLUDE_CHANNELS when the line is absent.
+export function parsePolicy(text) {
+  const excludeLine = policyLine(text, 'Exclude channels');
+  return {
+    patterns_file: policyLine(text, 'Patterns file'),
+    channels: channelList(policyLine(text, 'Channels')),
+    exclude_channels: excludeLine === null && !/^Exclude channels:/mi.test(text)
+      ? [...DEFAULT_EXCLUDE_CHANNELS]
+      : (channelList(excludeLine) ?? [])
+  };
+}
+
+export function readPolicy(policy = DEFAULT_POLICY) {
+  const file = policyPath(policy);
+  if (!fs.existsSync(file)) return { policy, policy_file: file, exists: false, unconfigured: true, patterns_file: null, channels: null, exclude_channels: [] };
+  const text = fs.readFileSync(file, 'utf8');
+  return { policy, policy_file: file, exists: true, unconfigured: text.includes(UNCONFIGURED_MARKER), ...parsePolicy(text) };
+}
 
 export function normalizeTaskName(value) {
   if (value === undefined || value === null || value === true || value === '') return DEFAULT_TASK;
@@ -126,16 +192,21 @@ export function normalizeTaskName(value) {
   return name;
 }
 
-export function schedulerPrompt(lookback = DEFAULT_CONFIG.default_lookback, task = DEFAULT_TASK) {
-  return `Run the thinking-patterns skill (task "${task}", lookback ${lookback}). Load and follow ${SKILL_MD_INSTALLED}. Use its required background-subagent execution model; the subagent's fetch step is \`node ${EXTRACT_INSTALLED} fetch --lookback ${lookback} --task ${task}\`, and every commit step must pass \`--task ${task}\`. The main session only orchestrates and marks the scheduler task done after the subagent completes.`;
+export function schedulerPrompt(lookback = DEFAULT_CONFIG.default_lookback, task = DEFAULT_TASK, policy = DEFAULT_POLICY) {
+  const policyArg = policy === DEFAULT_POLICY ? '' : ` --policy ${policy}`;
+  const policyNote = policy === DEFAULT_POLICY ? '' : `, policy "${policy}"`;
+  return `Run the thinking-patterns skill (task "${task}", lookback ${lookback}${policyNote}). Load and follow ${SKILL_MD_INSTALLED}. Use its required background-subagent execution model; the subagent's fetch step is \`node ${EXTRACT_INSTALLED} fetch --lookback ${lookback} --task ${task}${policyArg}\`, and every commit step must pass \`--task ${task}${policyArg}\`. The main session only orchestrates and marks the scheduler task done after the subagent completes.`;
 }
 
-export function schedulerTaskName(task = DEFAULT_TASK) {
-  return task === DEFAULT_TASK ? TASK_NAME_PREFIX : `${TASK_NAME_PREFIX}-${task}`;
+export function schedulerTaskName(task = DEFAULT_TASK, policy = DEFAULT_POLICY) {
+  const parts = [TASK_NAME_PREFIX];
+  if (policy !== DEFAULT_POLICY) parts.push(policy);
+  if (task !== DEFAULT_TASK) parts.push(task);
+  return parts.join('-');
 }
 
-export function schedulerTemplate(lookback = DEFAULT_CONFIG.default_lookback, task = DEFAULT_TASK, cron = '50 23 * * *') {
-  const prompt = schedulerPrompt(lookback, task);
+export function schedulerTemplate(lookback = DEFAULT_CONFIG.default_lookback, task = DEFAULT_TASK, cron = '50 23 * * *', policy = DEFAULT_POLICY) {
+  const prompt = schedulerPrompt(lookback, task, policy);
   return [
     '# Scheduler task template for thinking-patterns',
     '',
@@ -146,11 +217,11 @@ export function schedulerTemplate(lookback = DEFAULT_CONFIG.default_lookback, ta
     '',
     'Then register the task once (values below are examples):',
     '',
-    `node ${SCHEDULER_CLI_INSTALLED} add "${prompt}" --cron "${cron}" --priority 3 --name ${schedulerTaskName(task)}`,
+    `node ${SCHEDULER_CLI_INSTALLED} add "${prompt}" --cron "${cron}" --priority 3 --name ${schedulerTaskName(task, policy)}`,
     '',
     'Print a template for other values with:',
     '',
-    `node ${EXTRACT_INSTALLED} template --lookback 7d --task weekly --cron "0 22 * * 0"`,
+    `node ${EXTRACT_INSTALLED} template --lookback 7d --task weekly --cron "0 22 * * 0" [--policy <name>]`,
     '',
     'Task description (used verbatim above):',
     '',
@@ -221,22 +292,35 @@ export function policyIsUnconfigured(policyPath = POLICY_PATH) {
 // hand-edited file stays authoritative.
 const ENTRY_HEADING = /^## (\d+)\. /gm;
 const REINFORCED = /^\*\*Reinforced \(/gm;
+const TAG = /^`\[Domain: ([^|\]]+?)\s*\|\s*Type: ([^\]]+?)\s*\]`/gm;
+
+function tally(values) {
+  const counts = {};
+  for (const value of values) counts[value] = (counts[value] || 0) + 1;
+  return Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
+}
 
 export function inspectPatternsFile(patternsFile) {
+  if (!patternsFile) {
+    return { patterns_file: null, exists: false, entry_count: 0, max_number: 0, next_number: 1, reinforced_count: 0, domains: {}, types: {} };
+  }
   const resolved = expandHome(patternsFile);
   if (!fs.existsSync(resolved)) {
-    return { patterns_file: resolved, exists: false, entry_count: 0, max_number: 0, next_number: 1, reinforced_count: 0 };
+    return { patterns_file: resolved, exists: false, entry_count: 0, max_number: 0, next_number: 1, reinforced_count: 0, domains: {}, types: {} };
   }
   const text = fs.readFileSync(resolved, 'utf8');
   const numbers = [...text.matchAll(ENTRY_HEADING)].map(m => Number(m[1]));
   const maxNumber = numbers.length ? Math.max(...numbers) : 0;
+  const tags = [...text.matchAll(TAG)];
   return {
     patterns_file: resolved,
     exists: true,
     entry_count: numbers.length,
     max_number: maxNumber,
     next_number: maxNumber + 1,
-    reinforced_count: [...text.matchAll(REINFORCED)].length
+    reinforced_count: [...text.matchAll(REINFORCED)].length,
+    domains: tally(tags.map(m => m[1].trim())),
+    types: tally(tags.map(m => m[2].trim()))
   };
 }
 

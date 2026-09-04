@@ -6,10 +6,10 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import {
-  CONFIG_PATH, POLICY_PATH, STATE_PATH, LOG_DIR, RUN_LOG_PATH, METHODOLOGY_PATH,
+  CONFIG_PATH, STATE_PATH, LOG_DIR, RUN_LOG_PATH, METHODOLOGY_PATH,
   DEFAULT_CONFIG, SCHEDULE_QUESTIONS, POLICY_TEMPLATE,
   atomicWriteJson, ensureDir, expandHome, formatC4Timestamp, formatTranscript, inspectPatternsFile,
-  loadConfig, loadState, normalizeTaskName, parseC4Timestamp, parseDuration, policyIsUnconfigured, run,
+  loadConfig, loadState, normalizePolicyName, normalizeTaskName, parseC4Timestamp, parseDuration, readPolicy, run,
   schedulerPrompt, schedulerTaskName, schedulerTemplate
 } from './lib.js';
 
@@ -58,6 +58,10 @@ function parseArgs(argv) {
   return { command, args };
 }
 
+function optional(args, key) {
+  return args[key] === undefined || args[key] === true ? null : String(args[key]);
+}
+
 function requireScript(filePath, label) {
   const resolved = expandHome(filePath);
   if (!fs.existsSync(resolved)) throw new Error(`${label} not found: ${resolved}`);
@@ -74,12 +78,21 @@ function recentRows(c4DbCli, limit) {
   return parsed.map(row => ({ ...row, _ms: parseC4Timestamp(row.timestamp) }));
 }
 
+function policySummary(policy) {
+  return {
+    policy: policy.policy,
+    policy_file: policy.policy_file,
+    policy_unconfigured: policy.unconfigured,
+    filters: { channels: policy.channels, exclude_channels: policy.exclude_channels },
+    patterns: inspectPatternsFile(policy.patterns_file)
+  };
+}
+
 function commandFetch(args) {
   const config = loadConfig();
   const task = normalizeTaskName(args.task);
-  const lookbackText = args.lookback === undefined || args.lookback === true
-    ? String(config.default_lookback ?? DEFAULT_CONFIG.default_lookback)
-    : String(args.lookback);
+  const policy = readPolicy(normalizePolicyName(args.policy));
+  const lookbackText = optional(args, 'lookback') ?? String(config.default_lookback ?? DEFAULT_CONFIG.default_lookback);
   const lookbackMs = parseDuration(lookbackText);
   const minConversations = Number(config.min_conversations ?? DEFAULT_CONFIG.min_conversations);
   if (!Number.isSafeInteger(minConversations) || minConversations < 1) {
@@ -99,8 +112,7 @@ function commandFetch(args) {
     count: 0,
     min_conversations: minConversations,
     max_conversations: maxConversations,
-    patterns: inspectPatternsFile(config.patterns_file),
-    policy_file: POLICY_PATH,
+    ...policySummary(policy),
     methodology_file: METHODOLOGY_PATH,
     state_file: STATE_PATH
   };
@@ -108,17 +120,31 @@ function commandFetch(args) {
   if (config.enabled === false) {
     outputJson({ status: 'skip', reason: 'disabled', ...base });
   }
-  if (policyIsUnconfigured(POLICY_PATH)) {
-    outputJson({ status: 'skip', reason: 'unconfigured', ...base, owner_action: 'policy.md still carries the UNCONFIGURED marker; ask the owner to fill it in' });
+  if (policy.unconfigured) {
+    outputJson({
+      status: 'skip', reason: 'unconfigured', ...base,
+      owner_action: policy.exists
+        ? `${policy.policy_file} still carries the UNCONFIGURED marker; ask the owner to fill it in`
+        : `${policy.policy_file} does not exist; ask the owner for the policy (print a template with \`extract.js template --policy\`)`
+    });
+  }
+  if (!policy.patterns_file) {
+    outputJson({
+      status: 'skip', reason: 'unconfigured', ...base,
+      owner_action: `${policy.policy_file} has no "Patterns file:" line under ## Target; ask the owner which file the patterns go to`
+    });
   }
 
   const c4DbCli = requireScript(config.c4_db_cli, 'c4-db.js');
   const recent = recentRows(c4DbCli, maxConversations);
-  const rows = recent.filter(row => row._ms >= beginMs && row._ms <= endMs);
+  const inWindow = recent.filter(row => row._ms >= beginMs && row._ms <= endMs);
+  const include = policy.channels === null ? null : new Set(policy.channels);
+  const exclude = new Set(policy.exclude_channels);
+  const rows = inWindow.filter(row => (include === null || include.has(row.channel)) && !exclude.has(row.channel));
   // If the cap returned a full page and its oldest row is already inside the
   // window, older in-window rows exist that this run cannot see.
-  const truncated = recent.length >= maxConversations && rows.length === recent.length;
-  const envelope = { ...base, count: rows.length, truncated };
+  const truncated = recent.length >= maxConversations && inWindow.length === recent.length;
+  const envelope = { ...base, count: rows.length, filtered_out: inWindow.length - rows.length, truncated };
 
   if (rows.length < minConversations) {
     outputJson({ status: 'skip', reason: 'below_threshold', ...envelope });
@@ -136,16 +162,17 @@ function commandCommit(args) {
     throw new Error('commit requires --result skip|no_change|updated');
   }
   const task = normalizeTaskName(args.task);
+  const policy = normalizePolicyName(args.policy);
   const state = loadState();
   const now = new Date().toISOString();
-  const windowEnd = args['window-end'] === undefined || args['window-end'] === true ? null : String(args['window-end']);
-  const lookback = args.lookback === undefined || args.lookback === true ? null : String(args.lookback);
+  const windowEnd = optional(args, 'window-end');
+  const lookback = optional(args, 'lookback');
 
   const nextState = {
     ...state,
     last_run_at: now,
     last_result: result,
-    last_window: { task, lookback, end: windowEnd }
+    last_window: { task, policy, lookback, end: windowEnd }
   };
   if (result === 'updated') nextState.last_update_at = now;
 
@@ -154,6 +181,7 @@ function commandCommit(args) {
   fs.appendFileSync(RUN_LOG_PATH, `${JSON.stringify({
     timestamp: now,
     task,
+    policy,
     result,
     lookback,
     window_end: windowEnd,
@@ -163,59 +191,55 @@ function commandCommit(args) {
   outputJson({
     status: 'committed',
     task,
+    policy,
     result,
     last_run_at: nextState.last_run_at,
     last_update_at: nextState.last_update_at
   });
 }
 
-function commandInspect() {
-  const config = loadConfig();
-  outputJson({
-    status: 'ok',
-    ...inspectPatternsFile(config.patterns_file),
-    policy_file: POLICY_PATH,
-    policy_unconfigured: policyIsUnconfigured(POLICY_PATH),
-    methodology_file: METHODOLOGY_PATH
-  });
+function commandInspect(args) {
+  const policy = readPolicy(normalizePolicyName(args.policy));
+  outputJson({ status: 'ok', ...policySummary(policy), methodology_file: METHODOLOGY_PATH });
 }
 
-function commandStatus() {
+function commandStatus(args) {
   const config = loadConfig();
+  const policy = readPolicy(normalizePolicyName(args.policy));
   outputJson({
     status: 'ok',
     config_file: CONFIG_PATH,
     config,
     state_file: STATE_PATH,
     state: loadState(),
-    policy_file: POLICY_PATH,
-    policy_unconfigured: policyIsUnconfigured(POLICY_PATH),
-    patterns: inspectPatternsFile(config.patterns_file)
+    ...policySummary(policy)
   });
 }
 
 function commandTemplate(args) {
-  if (args.policy) {
+  if (args.policy === true) {
     writeOut(POLICY_TEMPLATE);
     process.exit(0);
   }
-  const lookback = args.lookback === undefined || args.lookback === true ? loadConfig().default_lookback : String(args.lookback);
+  const lookback = optional(args, 'lookback') ?? loadConfig().default_lookback;
   parseDuration(lookback);
   const task = normalizeTaskName(args.task);
-  const cron = args.cron === undefined || args.cron === true ? '50 23 * * *' : String(args.cron);
+  const policy = normalizePolicyName(args.policy);
+  const cron = optional(args, 'cron') ?? '50 23 * * *';
   if (args.json) {
     outputJson({
       status: 'ok',
       task,
+      policy,
       lookback,
       cron,
-      scheduler_task_name: schedulerTaskName(task),
-      scheduler_prompt: schedulerPrompt(lookback, task),
+      scheduler_task_name: schedulerTaskName(task, policy),
+      scheduler_prompt: schedulerPrompt(lookback, task, policy),
       questions: SCHEDULE_QUESTIONS,
-      template: schedulerTemplate(lookback, task, cron)
+      template: schedulerTemplate(lookback, task, cron, policy)
     });
   }
-  writeOut(schedulerTemplate(lookback, task, cron));
+  writeOut(schedulerTemplate(lookback, task, cron, policy));
   process.exit(0);
 }
 
@@ -224,12 +248,12 @@ function main() {
   try {
     if (command === 'fetch') commandFetch(args);
     if (command === 'commit') commandCommit(args);
-    if (command === 'inspect') commandInspect();
-    if (command === 'status') commandStatus();
+    if (command === 'inspect') commandInspect(args);
+    if (command === 'status') commandStatus(args);
     if (command === 'template') commandTemplate(args);
     outputJson({
       status: 'error',
-      error: 'Usage: extract.js fetch [--lookback 24h] [--task name] | commit --result <skip|no_change|updated> [--task name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS"] | inspect | status | template [--policy] [--lookback 24h] [--task name] [--cron "50 23 * * *"] [--json]'
+      error: 'Usage: extract.js fetch [--lookback 24h] [--task name] [--policy name] | commit --result <skip|no_change|updated> [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS"] | inspect [--policy name] | status [--policy name] | template [--policy | --policy name] [--lookback 24h] [--task name] [--cron "50 23 * * *"] [--json]'
     }, 1);
   } catch (err) {
     outputError(err.message);

@@ -38,17 +38,22 @@ It does **not** register a scheduler task. The owner decides when extraction run
 
 Three decisions belong to the owner; the agent asks and writes them down.
 
-1. **Policy.** Answer the questions in `policy.md` (whose or what patterns; which conversation streams; the starting set of Domain tags; whether to record directly, ask first, or record silently; where run summaries go), then remove the `UNCONFIGURED` marker line. Until the marker is gone every run is skipped and the agent keeps reminding the owner. A fresh template:
+1. **Policy.** Answer the questions in `policy.md` (whose or what patterns; which file they go to; which conversation streams; the starting set of Domain tags; whether to record directly, ask first, or record silently; where run summaries go), then remove the `UNCONFIGURED` marker line. Until the marker is gone every run is skipped and the agent keeps reminding the owner. A fresh template:
    ```bash
    node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template --policy
    ```
-2. **Target and threshold.** Set `patterns_file` (and optionally `min_conversations`) in `config.json`. An existing file in the methodology's entry format is picked up as-is; numbering continues from its highest entry.
+   The policy is prose for the agent except for three lines that the script reads:
+   - `Patterns file: <path>` under `## Target` — the only file the workflow ever writes. An existing file in the methodology's entry format is picked up as-is; numbering continues from its highest entry.
+   - `Channels: all|<list>` and `Exclude channels: <list>|none` under `## Sources` — a coarse filter on the C4 channel applied at fetch time. When the exclude line is absent, `system` and `void` (scheduler notices, the agent's own memos) are excluded. Anything finer — groups, topics, people — stays prose and is the agent's judgment.
+2. **Threshold.** Optionally set `min_conversations`, `max_conversations`, `default_lookback` in `config.json`.
 3. **Schedule.** Before registering any scheduled task the agent asks the owner three things: how often it runs (cron), how far back each run looks (the lookback, default = the run interval), and a task name when it is not the first task. The template prints these questions and the registration command with the chosen values (the prompt must be used verbatim):
    ```bash
    node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template --lookback 24h --task daily --cron "50 23 * * *"
    ```
 
 Several tasks may coexist with different lookbacks — for example a daily `24h` pass and a weekly `7d` pass that catches cross-day patterns. They share the one policy and pattern file; overlap between runs is harmless because the methodology de-duplicates against the file. There is no cursor and nothing to seed on first install: the first run simply looks back its lookback.
+
+A second subject (another person, role or domain) is a second policy file, `policy-<name>.md`, with its own `Patterns file`. Every command takes `--policy <name>` to address it, and its scheduler tasks are named `thinking-patterns-<name>[-<task>]`. One policy, one subject, one pattern file.
 
 ## Configuration
 
@@ -60,7 +65,6 @@ Several tasks may coexist with different lookbacks — for example a daily `24h`
   "min_conversations": 30,
   "max_conversations": 300,
   "default_lookback": "24h",
-  "patterns_file": "~/zylos/memory/thinking-patterns.md",
   "c4_db_cli": "~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js"
 }
 ```
@@ -68,13 +72,14 @@ Several tasks may coexist with different lookbacks — for example a daily `24h`
 - `min_conversations` — below this many messages inside the window the run is recorded as `skip`.
 - `max_conversations` — the most messages a single run will read; when a window holds more, the oldest part is left out and the fetch result says `truncated: true`.
 - `default_lookback` — used when a task does not pass `--lookback`. Each scheduled task normally carries its own.
-- `patterns_file` — the only file the workflow may write to, and only by appending.
+
+The target pattern file is not in config: it is the policy's `Patterns file` line (an older `patterns_file` in config is moved there by the post-upgrade hook).
 
 ## Runtime Model
 
 A recurring scheduler task dispatches the skill. The main session launches a **background subagent** and only marks the task done afterwards. The subagent:
 
-1. `extract.js fetch --lookback <d> --task <name>` — asks comm-bridge for the newest rows, keeps those inside the lookback window, checks the threshold and the policy marker.
+1. `extract.js fetch --lookback <d> --task <name> [--policy <p>]` — asks comm-bridge for the newest rows, keeps those inside the lookback window, applies the policy's channel filter (echoed back as `filters` / `filtered_out`), checks the threshold and the policy marker, and summarizes the target file (next entry number, Domain/Type distribution).
 2. Reads `policy.md`, `references/methodology.md`, and the current pattern file.
 3. Applies the methodology: detect decision moments → extract cues and rationale → induce candidates → reinforce an existing entry, flag a contradiction, or create a new numbered entry → apply the quality bar. Extracting nothing is a normal outcome.
 4. Writes (or holds candidates) per the policy's confirmation mode and notifies the owner's endpoint if the policy asks for it.
@@ -85,18 +90,18 @@ See [`SKILL.md`](./SKILL.md) for the exact workflow and write boundary, and [`re
 ## CLI
 
 ```bash
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js fetch [--lookback 24h] [--task name]
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js commit --result skip|no_change|updated [--task name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS"]
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js inspect     # entry count, max/next number, policy state
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js status      # config + state + policy + patterns
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template [--policy] [--lookback 24h] [--task name] [--cron "..."] [--json]
+node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js fetch [--lookback 24h] [--task name] [--policy name]
+node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js commit --result skip|no_change|updated [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS"]
+node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js inspect [--policy name]   # policy filters, pattern file: entry count, next number, Domain/Type distribution
+node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js status [--policy name]    # config + state + policy + patterns
+node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template [--policy | --policy name] [--lookback 24h] [--task name] [--cron "..."] [--json]
 ```
 
-Every command prints JSON except `template`, which prints text unless `--json` is given.
+Every command prints JSON except `template`, which prints text unless `--json` is given. `template --policy` with no value prints the policy template; with a name it prints the scheduler template for that policy.
 
 ## State
 
-`state.json` records `last_run_at`, `last_result`, `last_update_at`, and `last_window` (task, lookback, window end). There is no cursor: each run is defined by its own window. Each commit appends one line to `logs/runs.jsonl`. `config.json`, `policy.md`, `state.json`, `logs/` and `backups/` are preserved across upgrades; `pre-upgrade` snapshots the first three into `backups/<timestamp>/`.
+`state.json` records `last_run_at`, `last_result`, `last_update_at`, and `last_window` (task, policy, lookback, window end). There is no cursor: each run is defined by its own window. Each commit appends one line to `logs/runs.jsonl`. `config.json`, `policy.md`, `state.json`, `logs/` and `backups/` are preserved across upgrades; `pre-upgrade` snapshots the first three into `backups/<timestamp>/`.
 
 ## Design Note
 

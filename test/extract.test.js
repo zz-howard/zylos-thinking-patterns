@@ -80,9 +80,14 @@ function writeConfig(dataDir, config) {
   fs.writeFileSync(path.join(dataDir, 'config.json'), `${JSON.stringify(config, null, 2)}\n`);
 }
 
-function writeConfiguredPolicy(dataDir) {
+// A filled-in owner policy. The target file lives in the policy (## Target), not in config.
+function policyText(patternsFile, extra = '') {
+  return `# Policy\n\nSubject: the owner\n\n## Target\n\nPatterns file: ${patternsFile}\n\n## Sources\n\n${extra}\nConfirmation: record and notify me\n`;
+}
+
+function writeConfiguredPolicy(dataDir, patternsFile, extra = '', name = 'policy.md') {
   fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'policy.md'), '# Policy\n\nSubject: the owner\nConfirmation: record and notify me\n');
+  fs.writeFileSync(path.join(dataDir, name), policyText(patternsFile, extra));
 }
 
 function readState(dataDir) {
@@ -94,8 +99,8 @@ function setup(rows, config = {}) {
   const dataDir = path.join(dir, 'data');
   const dbPath = createFakeC4(dir, rows);
   const patternsFile = path.join(dir, 'patterns.md');
-  writeConfig(dataDir, { min_conversations: 2, c4_db_cli: dbPath, patterns_file: patternsFile, ...config });
-  writeConfiguredPolicy(dataDir);
+  writeConfig(dataDir, { min_conversations: 2, c4_db_cli: dbPath, ...config });
+  writeConfiguredPolicy(dataDir, patternsFile);
   return { dir, dataDir, patternsFile, env: { ZYLOS_DATA_DIR: dataDir } };
 }
 
@@ -129,7 +134,10 @@ test('fetch returns ready envelope with transcript at threshold', () => {
   assert.ok(result.conversations.indexOf('message 1') < result.conversations.indexOf('message 2'), 'oldest first');
   assert.equal(result.patterns.exists, false);
   assert.equal(result.patterns.next_number, 1);
+  assert.equal(result.policy, 'default');
   assert.ok(result.policy_file.endsWith('policy.md'));
+  assert.deepEqual(result.filters, { channels: null, exclude_channels: ['system', 'void'] });
+  assert.equal(result.filtered_out, 0);
   assert.ok(result.methodology_file.endsWith('references/methodology.md'));
 });
 
@@ -286,7 +294,7 @@ test('commit records the run, task and window without marking an update', () => 
   assert.equal(state.schema_version, 2);
   assert.equal(state.last_result, 'skip');
   assert.equal(state.last_update_at, null);
-  assert.deepEqual(state.last_window, { task: 'daily', lookback: '24h', end: '2026-09-05 00:00:00' });
+  assert.deepEqual(state.last_window, { task: 'daily', policy: 'default', lookback: '24h', end: '2026-09-05 00:00:00' });
   const log = fs.readFileSync(path.join(dataDir, 'logs/runs.jsonl'), 'utf8').trim().split('\n');
   assert.equal(log.length, 1);
   assert.equal(JSON.parse(log[0]).result, 'skip');
@@ -345,21 +353,26 @@ test('inspect reports entry count, max number and next number from the pattern f
     '---',
     '',
     '## 7. Seventh',
+    '`[Domain: Architecture | Type: Constraint]`',
     '',
     '### 3. Not an entry heading',
+    'Prose mentioning `[Domain: Nope | Type: Nope]` mid-line is not a tag line',
     '',
     '## 4. Fourth',
+    '`[Domain: Process | Type: Heuristic]`',
     ''
   ].join('\n'));
 
   const result = JSON.parse(runNode(EXTRACT, ['inspect'], env));
 
   assert.equal(result.status, 'ok');
-  assert.equal(result.exists, true);
-  assert.equal(result.entry_count, 3);
-  assert.equal(result.max_number, 7);
-  assert.equal(result.next_number, 8);
-  assert.equal(result.reinforced_count, 1);
+  assert.equal(result.patterns.exists, true);
+  assert.equal(result.patterns.entry_count, 3);
+  assert.equal(result.patterns.max_number, 7);
+  assert.equal(result.patterns.next_number, 8);
+  assert.equal(result.patterns.reinforced_count, 1);
+  assert.deepEqual(result.patterns.domains, { Process: 2, Architecture: 1 });
+  assert.deepEqual(result.patterns.types, { Constraint: 2, Heuristic: 1 });
   assert.equal(result.policy_unconfigured, false);
 });
 
@@ -368,9 +381,10 @@ test('inspect on a missing pattern file starts numbering at 1', () => {
 
   const result = JSON.parse(runNode(EXTRACT, ['inspect'], env));
 
-  assert.equal(result.exists, false);
-  assert.equal(result.entry_count, 0);
-  assert.equal(result.next_number, 1);
+  assert.equal(result.patterns.exists, false);
+  assert.equal(result.patterns.entry_count, 0);
+  assert.equal(result.patterns.next_number, 1);
+  assert.deepEqual(result.patterns.domains, {});
 });
 
 test('status exposes config, state, policy and pattern-file summary', () => {
@@ -493,7 +507,206 @@ test('post-install preserves an existing policy and merges defaults into config'
   assert.equal(config.min_conversations, 7);
   assert.equal(config.enabled, true);
   assert.equal(config.default_lookback, '24h');
-  assert.ok(config.patterns_file);
+  assert.equal(config.patterns_file, undefined, 'target file belongs to the policy, not config');
+});
+
+test('fetch skips as unconfigured when the policy has no Patterns file line', () => {
+  const { dataDir, env } = setup(makeRows([10, 5]));
+  fs.writeFileSync(path.join(dataDir, 'policy.md'), '# Policy\n\nSubject: the owner\n\n## Target\n\nPatterns file: (fill in, e.g. ~/x.md)\n');
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.status, 'skip');
+  assert.equal(result.reason, 'unconfigured');
+  assert.match(result.owner_action, /Patterns file/);
+  assert.equal(result.patterns.patterns_file, null);
+  assert.equal(result.conversations, undefined);
+});
+
+test('fetch ignores a patterns_file left in config: the policy owns the target', () => {
+  const { dataDir, env } = setup(makeRows([10, 5]));
+  writeConfig(dataDir, { min_conversations: 1, c4_db_cli: path.join(dataDir, '../c4-db.js'), patterns_file: '/should/not/be/used.md' });
+  fs.writeFileSync(path.join(dataDir, 'policy.md'), '# Policy\n\nSubject: the owner\n');
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.status, 'skip');
+  assert.equal(result.reason, 'unconfigured');
+  assert.equal(result.patterns.patterns_file, null);
+});
+
+test('fetch --policy <name> reads policy-<name>.md with its own target file', () => {
+  const { dir, dataDir, patternsFile, env } = setup(makeRows([10, 5]));
+  const secondFile = path.join(dir, 'work-patterns.md');
+  writeConfiguredPolicy(dataDir, secondFile, '', 'policy-work.md');
+  fs.writeFileSync(secondFile, '# Work\n\n## 1. One\n\n## 2. Two\n');
+
+  const main = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+  const work = JSON.parse(runNode(EXTRACT, ['fetch', '--policy', 'work'], env));
+
+  assert.equal(main.policy, 'default');
+  assert.equal(main.patterns.patterns_file, patternsFile);
+  assert.equal(main.patterns.next_number, 1);
+  assert.equal(work.status, 'ready');
+  assert.equal(work.policy, 'work');
+  assert.ok(work.policy_file.endsWith('policy-work.md'));
+  assert.equal(work.patterns.patterns_file, secondFile);
+  assert.equal(work.patterns.next_number, 3);
+});
+
+test('fetch --policy for a missing policy file skips with an owner action naming that file', () => {
+  const { env } = setup(makeRows([10, 5]));
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch', '--policy', 'nope'], env));
+  const bad = JSON.parse(runNodeFailure(EXTRACT, ['fetch', '--policy', 'no spaces'], env).stdout);
+
+  assert.equal(result.status, 'skip');
+  assert.equal(result.reason, 'unconfigured');
+  assert.match(result.owner_action, /policy-nope\.md does not exist/);
+  assert.match(bad.error, /Invalid policy name/);
+});
+
+function mixedChannelRows() {
+  return [
+    ...makeRows([50, 40], { channel: 'telegram' }),
+    ...makeRows([30], { channel: 'lark' }).map(r => ({ ...r, id: 3 })),
+    ...makeRows([20], { channel: 'system' }).map(r => ({ ...r, id: 4 })),
+    ...makeRows([10], { channel: 'void' }).map(r => ({ ...r, id: 5 }))
+  ];
+}
+
+test('fetch excludes system and void channels by default and reports filtered_out', () => {
+  const { env } = setup(mixedChannelRows(), { min_conversations: 1 });
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.count, 3);
+  assert.equal(result.filtered_out, 2);
+  assert.deepEqual(result.filters, { channels: null, exclude_channels: ['system', 'void'] });
+  assert.match(result.conversations, /\(telegram:1\)/);
+  assert.match(result.conversations, /\(lark:1\)/);
+  assert.doesNotMatch(result.conversations, /\(system:1\)/);
+  assert.doesNotMatch(result.conversations, /\(void:1\)/);
+});
+
+test('fetch applies the policy Channels include list', () => {
+  const { dataDir, patternsFile, env } = setup(mixedChannelRows(), { min_conversations: 1 });
+  writeConfiguredPolicy(dataDir, patternsFile, 'Channels: telegram\nExclude channels: system, void\n');
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.count, 2);
+  assert.equal(result.filtered_out, 3);
+  assert.deepEqual(result.filters.channels, ['telegram']);
+  assert.doesNotMatch(result.conversations, /\(lark:1\)/);
+});
+
+test('fetch honours "Exclude channels: none" and an explicit exclude list', () => {
+  const { dataDir, patternsFile, env } = setup(mixedChannelRows(), { min_conversations: 1 });
+
+  writeConfiguredPolicy(dataDir, patternsFile, 'Channels: all\nExclude channels: none\n');
+  const none = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+  assert.equal(none.count, 5);
+  assert.equal(none.filtered_out, 0);
+  assert.deepEqual(none.filters.exclude_channels, []);
+  assert.match(none.conversations, /\(void:1\)/);
+
+  writeConfiguredPolicy(dataDir, patternsFile, 'Exclude channels: lark\n');
+  const lark = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+  assert.equal(lark.count, 4);
+  assert.deepEqual(lark.filters.exclude_channels, ['lark']);
+  assert.doesNotMatch(lark.conversations, /\(lark:1\)/);
+  assert.match(lark.conversations, /\(system:1\)/);
+});
+
+test('channel filtering happens before the threshold check', () => {
+  const { env } = setup(mixedChannelRows(), { min_conversations: 4 });
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.status, 'skip');
+  assert.equal(result.reason, 'below_threshold');
+  assert.equal(result.count, 3);
+  assert.equal(result.filtered_out, 2);
+});
+
+test('commit records the policy in state and the run log', () => {
+  const { dataDir, env } = setup(makeRows([10]));
+
+  const result = JSON.parse(runNode(EXTRACT, ['commit', '--result', 'no_change', '--policy', 'work', '--task', 'weekly'], env));
+
+  assert.equal(result.policy, 'work');
+  assert.equal(readState(dataDir).last_window.policy, 'work');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'logs/runs.jsonl'), 'utf8').trim()).policy, 'work');
+});
+
+test('post-upgrade moves patterns_file from config.json into the policy Target section', () => {
+  const { dir, dataDir, env } = setup(makeRows([10]));
+  const target = path.join(dir, 'legacy-patterns.md');
+  writeConfig(dataDir, { min_conversations: 2, patterns_file: target, c4_fetch_script: '/old/c4-fetch.js' });
+  fs.writeFileSync(path.join(dataDir, 'policy.md'), '# Policy\n\nSubject: the owner\nConfirmation: record silently\n');
+
+  const output = runNode(POST_UPGRADE, [], env);
+  const config = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
+  const policy = fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8');
+
+  assert.match(output, /Moved patterns_file/);
+  assert.equal(config.patterns_file, undefined);
+  assert.equal(config.c4_fetch_script, undefined);
+  assert.equal(config.min_conversations, 2);
+  assert.ok(policy.startsWith('# Policy\n\nSubject: the owner\nConfirmation: record silently\n'), 'owner prose untouched');
+  assert.match(policy, new RegExp(`\\n## Target\\n\\nPatterns file: ${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n$`));
+  assert.equal(JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.patterns_file, target);
+
+  // Idempotent: a second run neither appends again nor changes the policy.
+  runNode(POST_UPGRADE, [], env);
+  assert.equal(fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8'), policy);
+});
+
+test('post-upgrade drops the config copy when the policy already names a Patterns file', () => {
+  const { dataDir, patternsFile, env } = setup(makeRows([10]));
+  writeConfig(dataDir, { patterns_file: '/stale/copy.md' });
+  const before = fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8');
+
+  const output = runNode(POST_UPGRADE, [], env);
+
+  assert.match(output, /already names a Patterns file/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).patterns_file, undefined);
+  assert.equal(fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8'), before);
+  assert.equal(JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.patterns_file, patternsFile);
+});
+
+test('template --policy <name> names the task after the policy and passes --policy through', () => {
+  const { env } = setup(makeRows([10]));
+
+  const text = runNode(EXTRACT, ['template', '--policy', 'work', '--task', 'weekly', '--lookback', '7d'], env);
+  const plain = JSON.parse(runNode(EXTRACT, ['template', '--json', '--policy', 'work'], env));
+
+  assert.match(text, /--name thinking-patterns-work-weekly/);
+  assert.match(text, /fetch --lookback 7d --task weekly --policy work/);
+  assert.match(text, /--task weekly --policy work`/);
+  assert.equal(plain.scheduler_task_name, 'thinking-patterns-work');
+  assert.match(plain.scheduler_prompt, /policy "work"/);
+  assert.doesNotMatch(JSON.parse(runNode(EXTRACT, ['template', '--json'], env)).scheduler_prompt, /--policy/);
+});
+
+test('parsePolicy positive and negative controls', async () => {
+  const { parsePolicy } = await import('../scripts/lib.js');
+
+  const full = parsePolicy('## Target\nPatterns file: ~/a.md\n## Sources\nChannels: telegram, lark\nExclude channels: system\n');
+  assert.deepEqual(full, { patterns_file: '~/a.md', channels: ['telegram', 'lark'], exclude_channels: ['system'] });
+
+  const bare = parsePolicy('# Policy\nSubject: x\n');
+  assert.deepEqual(bare, { patterns_file: null, channels: null, exclude_channels: ['system', 'void'] });
+
+  const placeholders = parsePolicy('Patterns file: (fill in, e.g. ~/x.md)\nChannels: all\nExclude channels: none\n');
+  assert.deepEqual(placeholders, { patterns_file: null, channels: null, exclude_channels: [] });
+
+  // A blank Exclude line means "nothing excluded", not the default.
+  assert.deepEqual(parsePolicy('Exclude channels:\n').exclude_channels, []);
+  // Labels are matched at line start only; prose mentioning them does not count.
+  assert.equal(parsePolicy('see the Patterns file: ~/b.md line\n').patterns_file, null);
 });
 
 test('parseDuration positive and negative controls', async () => {
