@@ -13,8 +13,23 @@ import {
   schedulerPrompt, schedulerTaskName, schedulerTemplate
 } from './lib.js';
 
+// Synchronous write: on a pipe, process.stdout.write is asynchronous and a
+// following process.exit would truncate large payloads (a 7d transcript is
+// hundreds of KB). fs.writeSync completes before exit.
+function writeOut(text) {
+  const buffer = Buffer.from(text, 'utf8');
+  let offset = 0;
+  while (offset < buffer.length) {
+    try {
+      offset += fs.writeSync(process.stdout.fd, buffer, offset);
+    } catch (err) {
+      if (err.code !== 'EAGAIN') throw err;
+    }
+  }
+}
+
 function outputJson(value, exitCode = 0) {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  writeOut(`${JSON.stringify(value, null, 2)}\n`);
   process.exit(exitCode);
 }
 
@@ -181,7 +196,7 @@ function commandStatus() {
 
 function commandTemplate(args) {
   if (args.policy) {
-    process.stdout.write(POLICY_TEMPLATE);
+    writeOut(POLICY_TEMPLATE);
     process.exit(0);
   }
   const lookback = args.lookback === undefined || args.lookback === true ? loadConfig().default_lookback : String(args.lookback);
@@ -200,7 +215,7 @@ function commandTemplate(args) {
       template: schedulerTemplate(lookback, task, cron)
     });
   }
-  process.stdout.write(schedulerTemplate(lookback, task, cron));
+  writeOut(schedulerTemplate(lookback, task, cron));
   process.exit(0);
 }
 

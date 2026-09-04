@@ -133,6 +133,21 @@ test('fetch returns ready envelope with transcript at threshold', () => {
   assert.ok(result.methodology_file.endsWith('references/methodology.md'));
 });
 
+test('fetch writes a large transcript completely through a pipe', () => {
+  // Regression: process.stdout.write + process.exit truncated payloads larger
+  // than the pipe buffer. 200 rows × 4KB ≈ 800KB must arrive intact.
+  const rows = makeRows(Array.from({ length: 200 }, (_, i) => 200 - i));
+  for (const row of rows) row.content = `${row.content} ${'x'.repeat(4000)}`;
+  const { env } = setup(rows, { min_conversations: 1 });
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.count, 200);
+  assert.ok(result.conversations.length > 800_000);
+  assert.match(result.conversations, /message 200 \(age 1m\) x{4000}\n/);
+});
+
 test('fetch only includes rows inside the lookback window', () => {
   // ages: 30h, 25h, 23h, 1h — a 24h window keeps the last two.
   const { env } = setup(makeRows([30 * 60, 25 * 60, 23 * 60, 60]));
