@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Repository skeleton (package metadata, development guides, changelog).
 - `references/methodology.md`: the fixed extraction procedure (CDM-adapted), two-axis `[Domain | Type]` taxonomy, entry and Reinforced-block format, quality bar, and run-summary rules.
-- `scripts/extract.js` CLI (`fetch`, `commit`, `inspect`, `status`, `template`) with cursor, threshold, first-run cap and forward-only state; all C4 access via the comm-bridge CLI (`c4-db.js recent`, `c4-fetch.js`), no direct database access.
+- `scripts/extract.js` CLI (`fetch`, `commit`, `inspect`, `status`, `template`). `fetch` reads a time window (`--lookback`, per scheduled task) via the comm-bridge CLI (`c4-db.js recent`), no cursor, no direct database access; `max_conversations` caps a run and flags truncation.
 - `SKILL.md`: owner setup, background-subagent execution model, inner workflow, write boundary (append-only to the configured pattern file).
-- Owner `policy.md` template (subject / sources / domains / confirmation mode / notification / guidance) with an `UNCONFIGURED` marker that makes runs skip until filled in; scheduler-task template printed by `extract.js template` — the owner sets the schedule, post-install registers nothing.
+- Owner `policy.md` template (subject / sources / domains / confirmation mode / notification / guidance) with an `UNCONFIGURED` marker that makes runs skip until filled in; scheduler-task template printed by `extract.js template` with the three questions to ask the owner (interval, lookback, task name) — the owner sets the schedule, post-install registers nothing. Several tasks with different lookbacks may share one policy.
 - Lifecycle hooks: post-install (data dir, defaults, template, owner-action message), pre-upgrade (backup config/policy/state), post-upgrade (schema merge).
 - `node:test` suite covering fetch/commit/inspect/status/template and the post-install hook with fake comm-bridge CLIs.

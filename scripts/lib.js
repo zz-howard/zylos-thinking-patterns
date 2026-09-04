@@ -14,8 +14,10 @@ export const RUN_LOG_PATH = path.join(LOG_DIR, 'runs.jsonl');
 export const SKILL_DIR = path.resolve(import.meta.dirname, '..');
 export const METHODOLOGY_PATH = path.join(SKILL_DIR, 'references/methodology.md');
 export const SKILL_MD_INSTALLED = '~/zylos/.claude/skills/thinking-patterns/SKILL.md';
+export const EXTRACT_INSTALLED = '~/zylos/.claude/skills/thinking-patterns/scripts/extract.js';
 export const SCHEDULER_CLI_INSTALLED = '~/zylos/.claude/skills/scheduler/scripts/cli.js';
-export const TASK_NAME = 'thinking-patterns';
+export const TASK_NAME_PREFIX = 'thinking-patterns';
+export const DEFAULT_TASK = 'default';
 
 // A policy.md that still carries this marker has not been filled in by the owner.
 export const UNCONFIGURED_MARKER = '<!-- thinking-patterns: UNCONFIGURED -->';
@@ -24,18 +26,17 @@ export const DEFAULT_CONFIG = {
   enabled: true,
   min_conversations: 30,
   max_conversations: 300,
+  default_lookback: '24h',
   patterns_file: '~/zylos/memory/thinking-patterns.md',
-  c4_db_cli: '~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js',
-  c4_fetch_script: '~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js'
+  c4_db_cli: '~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js'
 };
 
 export const DEFAULT_STATE = {
-  schema_version: 1,
-  last_processed_id: 0,
-  last_observed_id: 0,
+  schema_version: 2,
   last_run_at: null,
   last_result: null,
-  last_update_at: null
+  last_update_at: null,
+  last_window: null
 };
 
 export const POLICY_TEMPLATE = `${UNCONFIGURED_MARKER}
@@ -96,20 +97,60 @@ Anything the extractor should pay special attention to, or must not record.
 Guidance: (fill in)
 `;
 
-export function schedulerPrompt() {
-  return `Run the thinking-patterns skill. Load and follow ${SKILL_MD_INSTALLED}. Use its required background-subagent execution model; the main session should only orchestrate and mark the scheduler task done after the subagent completes.`;
+// Durations are written the way an owner would say them: "24h", "7d", "90m", "36h".
+const DURATION = /^(\d+)\s*(m|h|d)$/i;
+const UNIT_MS = { m: 60_000, h: 3_600_000, d: 86_400_000 };
+
+export function parseDuration(value) {
+  if (typeof value !== 'string') throw new Error(`Invalid lookback: ${value}`);
+  const match = value.trim().match(DURATION);
+  if (!match || Number(match[1]) < 1) {
+    throw new Error(`Invalid lookback: "${value}" (use e.g. 90m, 24h, 7d)`);
+  }
+  return Number(match[1]) * UNIT_MS[match[2].toLowerCase()];
 }
 
-export function schedulerTemplate() {
-  const prompt = schedulerPrompt();
+// Owner-facing questions the agent must ask before registering a scheduled task.
+export const SCHEDULE_QUESTIONS = [
+  'How often should it run? (a cron expression in the scheduler timezone; nightly after the working day is typical)',
+  'How far back should each run look? (the lookback, e.g. 24h or 7d; default = the run interval. Shorter than the interval leaves gaps; longer overlaps, which is harmless because the methodology de-duplicates against the pattern file)',
+  'A short task name, only when this is not the first scheduled task (e.g. daily, weekly) — several tasks may run with different lookbacks; they share the one policy and pattern file'
+];
+
+export function normalizeTaskName(value) {
+  if (value === undefined || value === null || value === true || value === '') return DEFAULT_TASK;
+  const name = String(value).trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(name)) {
+    throw new Error(`Invalid task name: "${value}" (letters, digits, - and _, up to 32 chars)`);
+  }
+  return name;
+}
+
+export function schedulerPrompt(lookback = DEFAULT_CONFIG.default_lookback, task = DEFAULT_TASK) {
+  return `Run the thinking-patterns skill (task "${task}", lookback ${lookback}). Load and follow ${SKILL_MD_INSTALLED}. Use its required background-subagent execution model; the subagent's fetch step is \`node ${EXTRACT_INSTALLED} fetch --lookback ${lookback} --task ${task}\`, and every commit step must pass \`--task ${task}\`. The main session only orchestrates and marks the scheduler task done after the subagent completes.`;
+}
+
+export function schedulerTaskName(task = DEFAULT_TASK) {
+  return task === DEFAULT_TASK ? TASK_NAME_PREFIX : `${TASK_NAME_PREFIX}-${task}`;
+}
+
+export function schedulerTemplate(lookback = DEFAULT_CONFIG.default_lookback, task = DEFAULT_TASK, cron = '50 23 * * *') {
+  const prompt = schedulerPrompt(lookback, task);
   return [
     '# Scheduler task template for thinking-patterns',
     '',
-    'The owner decides when extraction runs. Pick a cron expression in the',
-    'scheduler timezone (a nightly run after the working day is typical), then',
-    'register the task once:',
+    'The owner decides when extraction runs and how far back each run looks.',
+    'Before registering a task, ask the owner:',
     '',
-    `node ${SCHEDULER_CLI_INSTALLED} add "${prompt}" --cron "50 23 * * *" --priority 3 --name ${TASK_NAME}`,
+    ...SCHEDULE_QUESTIONS.map((q, i) => `${i + 1}. ${q}`),
+    '',
+    'Then register the task once (values below are examples):',
+    '',
+    `node ${SCHEDULER_CLI_INSTALLED} add "${prompt}" --cron "${cron}" --priority 3 --name ${schedulerTaskName(task)}`,
+    '',
+    'Print a template for other values with:',
+    '',
+    `node ${EXTRACT_INSTALLED} template --lookback 7d --task weekly --cron "0 22 * * 0"`,
     '',
     'Task description (used verbatim above):',
     '',
@@ -157,23 +198,9 @@ export function loadConfig() {
   return { ...DEFAULT_CONFIG, ...readJson(CONFIG_PATH, DEFAULT_CONFIG) };
 }
 
-export function normalizeId(value, fallback = null) {
-  if (value === null || value === undefined || value === '') return fallback;
-  const numeric = Number(value);
-  if (!Number.isSafeInteger(numeric) || numeric < 0) {
-    throw new Error(`Invalid conversation id: ${value}`);
-  }
-  return numeric;
-}
-
 export function normalizeState(state) {
-  return {
-    ...DEFAULT_STATE,
-    ...state,
-    schema_version: 1,
-    last_processed_id: normalizeId(state.last_processed_id, 0),
-    last_observed_id: normalizeId(state.last_observed_id, 0)
-  };
+  const { last_processed_id, last_observed_id, ...rest } = state; // schema 1 leftovers are dropped
+  return { ...DEFAULT_STATE, ...rest, schema_version: 2 };
 }
 
 export function loadState() {
@@ -213,9 +240,24 @@ export function inspectPatternsFile(patternsFile) {
   };
 }
 
-// Message headers as printed by c4-fetch.js: "[YYYY-MM-DD HH:MM:SS] IN (channel:endpoint):"
-const MESSAGE_HEADER = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] (?:IN|OUT) \(/gm;
+// C4 stores timestamps as "YYYY-MM-DD HH:MM:SS" in UTC (SQLite CURRENT_TIMESTAMP).
+export function parseC4Timestamp(value) {
+  const ms = Date.parse(`${String(value).trim().replace(' ', 'T')}Z`);
+  if (Number.isNaN(ms)) throw new Error(`Invalid C4 timestamp: ${value}`);
+  return ms;
+}
 
-export function countMessages(transcript) {
-  return [...transcript.matchAll(MESSAGE_HEADER)].length;
+export function formatC4Timestamp(ms) {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+// Transcript in the same shape c4-fetch.js prints, built directly from rows.
+export function formatTranscript(rows, window) {
+  const lines = [`[Conversations] (window ${window.begin} ~ ${window.end} UTC, lookback ${window.lookback}, ${rows.length} messages)`];
+  for (const row of rows) {
+    lines.push(`[${row.timestamp}] ${String(row.direction).toUpperCase()} (${row.channel}:${row.endpoint_id ?? ''}):`);
+    lines.push(String(row.content ?? ''));
+    lines.push('');
+  }
+  return `${lines.join('\n')}\n`;
 }

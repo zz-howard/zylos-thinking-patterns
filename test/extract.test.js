@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const EXTRACT = path.join(ROOT, 'scripts/extract.js');
 const POST_INSTALL = path.join(ROOT, 'hooks/post-install.js');
+const POST_UPGRADE = path.join(ROOT, 'hooks/post-upgrade.js');
 const UNCONFIGURED_MARKER = '<!-- thinking-patterns: UNCONFIGURED -->';
 
 function tmpDir() {
@@ -35,13 +36,12 @@ function runNodeFailure(script, args = [], env = {}) {
   throw new Error('Expected command to fail');
 }
 
-// Fake comm-bridge CLIs driven by a JSON fixture file. The fake `recent N`
-// mirrors the real c4-db.js: newest N rows ordered by timestamp (not id).
-// The fake fetch prints the real c4-fetch.js header format for ids in range.
+// Fake comm-bridge CLI driven by a JSON fixture file. The fake `recent N`
+// mirrors the real c4-db.js: the N newest rows by timestamp, returned oldest
+// first, with content. This is the only C4 primitive the component uses.
 function createFakeC4(dir, rows) {
   const fixturePath = path.join(dir, 'c4-rows.json');
   fs.writeFileSync(fixturePath, JSON.stringify(rows));
-
   const dbPath = path.join(dir, 'c4-db.js');
   fs.writeFileSync(dbPath, `
 import fs from 'node:fs';
@@ -49,44 +49,30 @@ const rows = JSON.parse(fs.readFileSync(${JSON.stringify(fixturePath)}, 'utf8'))
 const [command, limitArg] = process.argv.slice(2);
 if (command !== 'recent') { console.error('unsupported: ' + command); process.exit(2); }
 const limit = Number(limitArg || 10);
-const sorted = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? 1 : a.timestamp > b.timestamp ? -1 : b.id - a.id));
-console.log(JSON.stringify(sorted.slice(0, limit), null, 2));
-`);
-
-  const fetchPath = path.join(dir, 'c4-fetch.js');
-  fs.writeFileSync(fetchPath, `
-import fs from 'node:fs';
-const rows = JSON.parse(fs.readFileSync(${JSON.stringify(fixturePath)}, 'utf8'));
-const args = process.argv.slice(2);
-const begin = Number(args[args.indexOf('--begin') + 1]);
-const end = Number(args[args.indexOf('--end') + 1]);
-console.log('[Conversations] (id ' + begin + ' ~ ' + end + ')');
-for (const row of rows.filter(r => r.id >= begin && r.id <= end).sort((a, b) => a.id - b.id)) {
-  console.log('[' + row.timestamp + '] ' + row.direction.toUpperCase() + ' (' + row.channel + ':' + row.endpoint_id + '):');
-  console.log(row.content);
-  console.log('');
-}
+const newest = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? 1 : a.timestamp > b.timestamp ? -1 : b.id - a.id)).slice(0, limit);
+newest.sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : a.id - b.id));
+console.log(JSON.stringify(newest, null, 2));
 `);
   fs.writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}\n');
-  return { dbPath, fetchPath };
+  return dbPath;
 }
 
-function makeRows(count, { startId = 1, channel = 'telegram' } = {}) {
-  const rows = [];
-  for (let i = 0; i < count; i += 1) {
-    const id = startId + i;
-    const minute = String(i % 60).padStart(2, '0');
-    const hour = String(Math.floor(i / 60) % 24).padStart(2, '0');
-    rows.push({
-      id,
-      timestamp: `2026-09-01 ${hour}:${minute}:00`,
-      direction: i % 2 === 0 ? 'in' : 'out',
-      channel,
-      endpoint_id: '1',
-      content: `message ${id}`
-    });
-  }
-  return rows;
+function c4Timestamp(ms) {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+// Rows are described by their age in minutes relative to now (UTC), so the
+// fixture matches whatever wall-clock the test runs at.
+function makeRows(agesMinutes, { channel = 'telegram' } = {}) {
+  const now = Date.now();
+  return agesMinutes.map((age, i) => ({
+    id: i + 1,
+    timestamp: c4Timestamp(now - age * 60_000),
+    direction: i % 2 === 0 ? 'in' : 'out',
+    channel,
+    endpoint_id: '1',
+    content: `message ${i + 1} (age ${age}m)`
+  }));
 }
 
 function writeConfig(dataDir, config) {
@@ -99,11 +85,6 @@ function writeConfiguredPolicy(dataDir) {
   fs.writeFileSync(path.join(dataDir, 'policy.md'), '# Policy\n\nSubject: the owner\nConfirmation: record and notify me\n');
 }
 
-function writeState(dataDir, state) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
-}
-
 function readState(dataDir) {
   return JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
 }
@@ -111,83 +92,119 @@ function readState(dataDir) {
 function setup(rows, config = {}) {
   const dir = tmpDir();
   const dataDir = path.join(dir, 'data');
-  const { dbPath, fetchPath } = createFakeC4(dir, rows);
+  const dbPath = createFakeC4(dir, rows);
   const patternsFile = path.join(dir, 'patterns.md');
-  writeConfig(dataDir, { min_conversations: 2, c4_db_cli: dbPath, c4_fetch_script: fetchPath, patterns_file: patternsFile, ...config });
+  writeConfig(dataDir, { min_conversations: 2, c4_db_cli: dbPath, patterns_file: patternsFile, ...config });
   writeConfiguredPolicy(dataDir);
   return { dir, dataDir, patternsFile, env: { ZYLOS_DATA_DIR: dataDir } };
 }
 
-test('fetch skips below threshold without advancing state', () => {
-  const { dataDir, env } = setup(makeRows(1));
+test('fetch skips below threshold without touching state', () => {
+  const { dataDir, env } = setup(makeRows([10]));
 
   const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
 
   assert.equal(result.status, 'skip');
   assert.equal(result.reason, 'below_threshold');
-  assert.equal(result.begin_id, 1);
-  assert.equal(result.end_id, 1);
   assert.equal(result.count, 1);
+  assert.equal(result.task, 'default');
+  assert.equal(result.window.lookback, '24h');
   assert.equal(result.conversations, undefined);
   assert.equal(fs.existsSync(path.join(dataDir, 'state.json')), false);
 });
 
 test('fetch returns ready envelope with transcript at threshold', () => {
-  const { env } = setup(makeRows(2));
+  const { env } = setup(makeRows([30, 10]));
 
   const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
 
   assert.equal(result.status, 'ready');
-  assert.equal(result.begin_id, 1);
-  assert.equal(result.end_id, 2);
   assert.equal(result.count, 2);
   assert.equal(result.min_conversations, 2);
-  assert.match(result.conversations, /\[Conversations\] \(id 1 ~ 2\)/);
-  assert.match(result.conversations, /IN \(telegram:1\):\nmessage 1/);
-  assert.match(result.conversations, /OUT \(telegram:1\):\nmessage 2/);
+  assert.equal(result.truncated, false);
+  assert.match(result.window.begin, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  assert.match(result.conversations, /\[Conversations\] \(window .* UTC, lookback 24h, 2 messages\)/);
+  assert.match(result.conversations, /IN \(telegram:1\):\nmessage 1 \(age 30m\)/);
+  assert.match(result.conversations, /OUT \(telegram:1\):\nmessage 2 \(age 10m\)/);
+  assert.ok(result.conversations.indexOf('message 1') < result.conversations.indexOf('message 2'), 'oldest first');
   assert.equal(result.patterns.exists, false);
   assert.equal(result.patterns.next_number, 1);
   assert.ok(result.policy_file.endsWith('policy.md'));
   assert.ok(result.methodology_file.endsWith('references/methodology.md'));
 });
 
-test('fetch resumes from last_processed_id and only counts newer rows', () => {
-  const { dataDir, env } = setup(makeRows(6));
-  writeState(dataDir, { last_processed_id: 4 });
+test('fetch only includes rows inside the lookback window', () => {
+  // ages: 30h, 25h, 23h, 1h — a 24h window keeps the last two.
+  const { env } = setup(makeRows([30 * 60, 25 * 60, 23 * 60, 60]));
 
-  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+  const result = JSON.parse(runNode(EXTRACT, ['fetch', '--lookback', '24h'], env));
 
   assert.equal(result.status, 'ready');
-  assert.equal(result.begin_id, 5);
-  assert.equal(result.end_id, 6);
   assert.equal(result.count, 2);
-  assert.doesNotMatch(result.conversations, /message 4\n/);
+  assert.doesNotMatch(result.conversations, /age 1800m/);
+  assert.doesNotMatch(result.conversations, /age 1500m/);
+  assert.match(result.conversations, /age 1380m/);
+  assert.match(result.conversations, /age 60m/);
 });
 
-test('fetch caps a first-run backlog to the max_conversations window', () => {
-  const { env } = setup(makeRows(10), { max_conversations: 4 });
+test('fetch --lookback overrides default_lookback from config', () => {
+  const { env } = setup(makeRows([30 * 60, 25 * 60, 60]), { default_lookback: '24h' });
+
+  const narrow = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+  const wide = JSON.parse(runNode(EXTRACT, ['fetch', '--lookback', '2d', '--task', 'weekly'], env));
+
+  assert.equal(narrow.status, 'skip');
+  assert.equal(narrow.count, 1);
+  assert.equal(wide.status, 'ready');
+  assert.equal(wide.count, 3);
+  assert.equal(wide.task, 'weekly');
+  assert.equal(wide.window.lookback, '2d');
+});
+
+test('two tasks with different lookbacks see different windows of the same data', () => {
+  const { env } = setup(makeRows([6 * 24 * 60, 3 * 24 * 60, 20 * 60, 30]), { min_conversations: 1 });
+
+  const daily = JSON.parse(runNode(EXTRACT, ['fetch', '--lookback', '24h', '--task', 'daily'], env));
+  const weekly = JSON.parse(runNode(EXTRACT, ['fetch', '--lookback', '7d', '--task', 'weekly'], env));
+
+  assert.equal(daily.count, 2);
+  assert.equal(weekly.count, 4);
+});
+
+test('fetch flags truncation when the cap hides older in-window rows', () => {
+  const { env } = setup(makeRows([50, 40, 30, 20, 10]), { max_conversations: 3, min_conversations: 1 });
 
   const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
 
-  assert.equal(result.status, 'ready');
-  assert.equal(result.begin_id, 7);
-  assert.equal(result.end_id, 10);
-  assert.equal(result.count, 4);
+  assert.equal(result.count, 3);
+  assert.equal(result.truncated, true);
+  assert.match(result.conversations, /age 10m/);
+  assert.doesNotMatch(result.conversations, /age 50m/);
 });
 
-test('fetch does not cap when the backlog fits inside the window', () => {
-  const { dataDir, env } = setup(makeRows(10), { max_conversations: 20 });
-  writeState(dataDir, { last_processed_id: 3 });
+test('fetch does not flag truncation when the cap returns rows outside the window', () => {
+  const { env } = setup(makeRows([30 * 60, 20, 10]), { max_conversations: 3, min_conversations: 1 });
 
   const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
 
-  assert.equal(result.begin_id, 4);
-  assert.equal(result.end_id, 10);
-  assert.equal(result.count, 7);
+  assert.equal(result.count, 2);
+  assert.equal(result.truncated, false);
+});
+
+test('fetch rejects an invalid lookback or task name as a JSON error', () => {
+  const { env } = setup(makeRows([10, 5]));
+
+  const bad = JSON.parse(runNodeFailure(EXTRACT, ['fetch', '--lookback', 'yesterday'], env).stdout);
+  const zero = JSON.parse(runNodeFailure(EXTRACT, ['fetch', '--lookback', '0h'], env).stdout);
+  const name = JSON.parse(runNodeFailure(EXTRACT, ['fetch', '--task', 'no spaces'], env).stdout);
+
+  assert.match(bad.error, /Invalid lookback/);
+  assert.match(zero.error, /Invalid lookback/);
+  assert.match(name.error, /Invalid task name/);
 });
 
 test('fetch skips with reason unconfigured while policy carries the marker', () => {
-  const { dataDir, env } = setup(makeRows(5));
+  const { dataDir, env } = setup(makeRows([10, 5]));
   fs.writeFileSync(path.join(dataDir, 'policy.md'), `${UNCONFIGURED_MARKER}\n# Policy\n`);
 
   const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
@@ -199,7 +216,7 @@ test('fetch skips with reason unconfigured while policy carries the marker', () 
 });
 
 test('fetch skips with reason unconfigured when policy is missing', () => {
-  const { dataDir, env } = setup(makeRows(5));
+  const { dataDir, env } = setup(makeRows([10, 5]));
   fs.unlinkSync(path.join(dataDir, 'policy.md'));
 
   const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
@@ -209,7 +226,7 @@ test('fetch skips with reason unconfigured when policy is missing', () => {
 });
 
 test('fetch skips when disabled', () => {
-  const { env } = setup(makeRows(5), { enabled: false });
+  const { env } = setup(makeRows([10, 5]), { enabled: false });
 
   const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
 
@@ -218,7 +235,7 @@ test('fetch skips when disabled', () => {
 });
 
 test('fetch reports a missing comm-bridge CLI as a JSON error', () => {
-  const { dataDir, env } = setup(makeRows(5));
+  const { dataDir, env } = setup(makeRows([10, 5]));
   writeConfig(dataDir, { min_conversations: 1, c4_db_cli: path.join(dataDir, 'missing-c4-db.js') });
 
   const failure = runNodeFailure(EXTRACT, ['fetch'], env);
@@ -229,95 +246,79 @@ test('fetch reports a missing comm-bridge CLI as a JSON error', () => {
   assert.match(result.error, /c4-db\.js not found/);
 });
 
-test('fetch reports an unparsable c4-db.js output as a JSON error', () => {
-  const { dir, dataDir, env } = setup(makeRows(5));
+test('fetch reports unparsable c4-db.js output and bad timestamps as JSON errors', () => {
+  const { dir, dataDir, env } = setup(makeRows([10, 5]));
   const brokenDb = path.join(dir, 'broken-c4-db.js');
   fs.writeFileSync(brokenDb, "console.log('not json');\n");
-  const { fetchPath } = createFakeC4(dir, makeRows(5));
-  writeConfig(dataDir, { min_conversations: 1, c4_db_cli: brokenDb, c4_fetch_script: fetchPath });
+  writeConfig(dataDir, { min_conversations: 1, c4_db_cli: brokenDb });
+  const broken = JSON.parse(runNodeFailure(EXTRACT, ['fetch'], env).stdout);
+  assert.equal(broken.status, 'error');
 
-  const failure = runNodeFailure(EXTRACT, ['fetch'], env);
-  const result = JSON.parse(failure.stdout);
-
-  assert.equal(failure.status, 1);
-  assert.equal(result.status, 'error');
+  const badTs = createFakeC4(dir, [{ id: 1, timestamp: 'not a time', direction: 'in', channel: 'x', endpoint_id: '1', content: 'y' }]);
+  writeConfig(dataDir, { min_conversations: 1, c4_db_cli: badTs });
+  const ts = JSON.parse(runNodeFailure(EXTRACT, ['fetch'], env).stdout);
+  assert.match(ts.error, /Invalid C4 timestamp/);
 });
 
-test('commit skip records the run and keeps the processed cursor', () => {
-  const { dataDir, env } = setup(makeRows(1));
-  writeState(dataDir, { last_processed_id: 3 });
+test('commit records the run, task and window without marking an update', () => {
+  const { dataDir, env } = setup(makeRows([10]));
 
-  const result = JSON.parse(runNode(EXTRACT, ['commit', '--result', 'skip', '--observed-end-id', '9'], env));
+  const result = JSON.parse(runNode(EXTRACT, ['commit', '--result', 'skip', '--task', 'daily', '--lookback', '24h', '--window-end', '2026-09-05 00:00:00'], env));
   const state = readState(dataDir);
 
   assert.equal(result.status, 'committed');
-  assert.equal(state.last_processed_id, 3);
-  assert.equal(state.last_observed_id, 9);
+  assert.equal(result.task, 'daily');
+  assert.equal(state.schema_version, 2);
   assert.equal(state.last_result, 'skip');
   assert.equal(state.last_update_at, null);
+  assert.deepEqual(state.last_window, { task: 'daily', lookback: '24h', end: '2026-09-05 00:00:00' });
   const log = fs.readFileSync(path.join(dataDir, 'logs/runs.jsonl'), 'utf8').trim().split('\n');
   assert.equal(log.length, 1);
   assert.equal(JSON.parse(log[0]).result, 'skip');
+  assert.equal(JSON.parse(log[0]).task, 'daily');
 });
 
-test('commit no_change advances the processed cursor without marking an update', () => {
-  const { dataDir, env } = setup(makeRows(1));
+test('commit no_change does not mark an update; updated records the update time', () => {
+  const { dataDir, env } = setup(makeRows([10]));
 
-  runNode(EXTRACT, ['commit', '--result', 'no_change', '--end-id', '12'], env);
+  runNode(EXTRACT, ['commit', '--result', 'no_change'], env);
+  assert.equal(readState(dataDir).last_update_at, null);
+  assert.equal(readState(dataDir).last_window.task, 'default');
+
+  runNode(EXTRACT, ['commit', '--result', 'updated'], env);
   const state = readState(dataDir);
-
-  assert.equal(state.last_processed_id, 12);
-  assert.equal(state.last_observed_id, 12);
-  assert.equal(state.last_result, 'no_change');
-  assert.equal(state.last_update_at, null);
-});
-
-test('commit updated advances the cursor and records the update time', () => {
-  const { dataDir, env } = setup(makeRows(1));
-
-  runNode(EXTRACT, ['commit', '--result', 'updated', '--end-id', '15'], env);
-  const state = readState(dataDir);
-
-  assert.equal(state.last_processed_id, 15);
   assert.equal(state.last_result, 'updated');
   assert.ok(state.last_update_at);
+  assert.equal(fs.readFileSync(path.join(dataDir, 'logs/runs.jsonl'), 'utf8').trim().split('\n').length, 2);
 });
 
-test('commit refuses to move the processed cursor backward', () => {
-  const { dataDir, env } = setup(makeRows(1));
-  writeState(dataDir, { last_processed_id: 20 });
+test('commit rejects an unknown result', () => {
+  const { env } = setup(makeRows([10]));
 
-  const failure = runNodeFailure(EXTRACT, ['commit', '--result', 'no_change', '--end-id', '10'], env);
-  const result = JSON.parse(failure.stdout);
+  const failure = runNodeFailure(EXTRACT, ['commit', '--result', 'bogus'], env);
 
   assert.equal(failure.status, 1);
-  assert.match(result.error, /Refusing to move last_processed_id backward/);
-  assert.equal(readState(dataDir).last_processed_id, 20);
+  assert.match(JSON.parse(failure.stdout).error, /commit requires --result/);
 });
 
-test('commit rejects an unknown result and a missing end id', () => {
-  const { env } = setup(makeRows(1));
+test('state written by schema 1 is migrated: id cursors dropped, schema 2', () => {
+  const { dataDir, env } = setup(makeRows([10]));
+  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ schema_version: 1, last_processed_id: 49611, last_observed_id: 49611, last_result: 'updated' }));
 
-  assert.match(JSON.parse(runNodeFailure(EXTRACT, ['commit', '--result', 'bogus'], env).stdout).error, /commit requires --result/);
-  assert.match(JSON.parse(runNodeFailure(EXTRACT, ['commit', '--result', 'updated'], env).stdout).error, /requires --end-id/);
-});
+  const status = JSON.parse(runNode(EXTRACT, ['status'], env));
+  assert.equal(status.state.schema_version, 2);
+  assert.equal(status.state.last_processed_id, undefined);
+  assert.equal(status.state.last_result, 'updated');
 
-test('fetch → commit round trip: second fetch starts after the committed end id', () => {
-  const { env } = setup(makeRows(4));
-
-  const first = JSON.parse(runNode(EXTRACT, ['fetch'], env));
-  assert.equal(first.status, 'ready');
-  runNode(EXTRACT, ['commit', '--result', 'no_change', '--end-id', String(first.end_id)], env);
-
-  const second = JSON.parse(runNode(EXTRACT, ['fetch'], env));
-  assert.equal(second.status, 'skip');
-  assert.equal(second.reason, 'below_threshold');
-  assert.equal(second.begin_id, 5);
-  assert.equal(second.count, 0);
+  runNode(POST_UPGRADE, [], env);
+  const migrated = readState(dataDir);
+  assert.equal(migrated.schema_version, 2);
+  assert.equal(migrated.last_processed_id, undefined);
+  assert.equal(migrated.last_result, 'updated');
 });
 
 test('inspect reports entry count, max number and next number from the pattern file', () => {
-  const { patternsFile, env } = setup(makeRows(1));
+  const { patternsFile, env } = setup(makeRows([10]));
   fs.writeFileSync(patternsFile, [
     '# Patterns',
     '',
@@ -348,7 +349,7 @@ test('inspect reports entry count, max number and next number from the pattern f
 });
 
 test('inspect on a missing pattern file starts numbering at 1', () => {
-  const { env } = setup(makeRows(1));
+  const { env } = setup(makeRows([10]));
 
   const result = JSON.parse(runNode(EXTRACT, ['inspect'], env));
 
@@ -358,43 +359,70 @@ test('inspect on a missing pattern file starts numbering at 1', () => {
 });
 
 test('status exposes config, state, policy and pattern-file summary', () => {
-  const { dataDir, env } = setup(makeRows(1));
-  writeState(dataDir, { last_processed_id: 5 });
+  const { env } = setup(makeRows([10]));
 
   const result = JSON.parse(runNode(EXTRACT, ['status'], env));
 
   assert.equal(result.status, 'ok');
   assert.equal(result.config.min_conversations, 2);
-  assert.equal(result.state.last_processed_id, 5);
-  assert.equal(result.state.schema_version, 1);
+  assert.equal(result.config.default_lookback, '24h');
+  assert.equal(result.state.schema_version, 2);
+  assert.equal(result.state.last_run_at, null);
   assert.equal(result.policy_unconfigured, false);
   assert.equal(result.patterns.next_number, 1);
 });
 
-test('template prints a scheduler command whose prompt points at the installed SKILL.md', () => {
-  const { env } = setup(makeRows(1));
+test('template prints the owner questions and a scheduler command carrying lookback and task', () => {
+  const { env } = setup(makeRows([10]));
 
-  const text = runNode(EXTRACT, ['template'], env);
+  const text = runNode(EXTRACT, ['template', '--lookback', '7d', '--task', 'weekly', '--cron', '0 22 * * 0'], env);
 
+  assert.match(text, /ask the owner/i);
+  assert.match(text, /1\. How often should it run\?/);
+  assert.match(text, /2\. How far back should each run look\?/);
+  assert.match(text, /3\. A short task name/);
   assert.match(text, /scheduler\/scripts\/cli\.js add "/);
-  assert.match(text, /--cron "/);
-  assert.match(text, /--name thinking-patterns/);
+  assert.match(text, /--cron "0 22 \* \* 0"/);
+  assert.match(text, /--name thinking-patterns-weekly/);
+  assert.match(text, /fetch --lookback 7d --task weekly/);
   assert.match(text, /skills\/thinking-patterns\/SKILL\.md/);
   assert.match(text, /background-subagent/);
 });
 
-test('template --json parses and carries the same prompt', () => {
-  const { env } = setup(makeRows(1));
+test('template defaults name the task thinking-patterns and use default_lookback', () => {
+  const { env } = setup(makeRows([10]), { default_lookback: '36h' });
 
-  const result = JSON.parse(runNode(EXTRACT, ['template', '--json'], env));
+  const text = runNode(EXTRACT, ['template'], env);
+
+  assert.match(text, /--name thinking-patterns\b/);
+  assert.doesNotMatch(text, /--name thinking-patterns-default/);
+  assert.match(text, /fetch --lookback 36h --task default/);
+});
+
+test('template --json parses and carries the same prompt and questions', () => {
+  const { env } = setup(makeRows([10]));
+
+  const result = JSON.parse(runNode(EXTRACT, ['template', '--json', '--lookback', '24h', '--task', 'daily'], env));
 
   assert.equal(result.status, 'ok');
-  assert.match(result.scheduler_prompt, /thinking-patterns\/SKILL\.md/);
+  assert.equal(result.task, 'daily');
+  assert.equal(result.lookback, '24h');
+  assert.equal(result.scheduler_task_name, 'thinking-patterns-daily');
+  assert.equal(result.questions.length, 3);
+  assert.match(result.scheduler_prompt, /--lookback 24h --task daily/);
   assert.ok(result.template.includes(result.scheduler_prompt));
 });
 
+test('template rejects an invalid lookback', () => {
+  const { env } = setup(makeRows([10]));
+
+  const failure = runNodeFailure(EXTRACT, ['template', '--lookback', 'soon'], env);
+
+  assert.match(JSON.parse(failure.stdout).error, /Invalid lookback/);
+});
+
 test('template --policy prints the policy template with the UNCONFIGURED marker first', () => {
-  const { env } = setup(makeRows(1));
+  const { env } = setup(makeRows([10]));
 
   const text = runNode(EXTRACT, ['template', '--policy'], env);
 
@@ -405,7 +433,7 @@ test('template --policy prints the policy template with the UNCONFIGURED marker 
 });
 
 test('unknown command prints usage as a JSON error', () => {
-  const { env } = setup(makeRows(1));
+  const { env } = setup(makeRows([10]));
 
   const failure = runNodeFailure(EXTRACT, ['nonsense'], env);
 
@@ -416,8 +444,7 @@ test('unknown command prints usage as a JSON error', () => {
 test('post-install creates config, policy template, state and logs dir without touching the scheduler', () => {
   const dir = tmpDir();
   const dataDir = path.join(dir, 'data');
-  // A PATH without node's directory would break the hook itself; instead make
-  // any scheduler invocation observable by planting a trap script named cli.js.
+  // Make any scheduler invocation observable by planting a trap script named cli.js.
   const trapDir = path.join(dir, 'trap');
   fs.mkdirSync(trapDir, { recursive: true });
   const trapMarker = path.join(dir, 'scheduler-was-called');
@@ -429,9 +456,10 @@ test('post-install creates config, policy template, state and logs dir without t
   assert.match(output, /Created config\.json/);
   assert.match(output, /Created policy\.md/);
   assert.match(output, /Created state\.json/);
+  assert.match(output, /How far back should each run look/);
   assert.ok(fs.existsSync(path.join(dataDir, 'config.json')));
   assert.ok(fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8').startsWith(UNCONFIGURED_MARKER));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')).last_processed_id, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')).schema_version, 2);
   assert.ok(fs.statSync(path.join(dataDir, 'logs')).isDirectory());
   assert.equal(fs.existsSync(trapMarker), false);
 });
@@ -449,28 +477,18 @@ test('post-install preserves an existing policy and merges defaults into config'
   assert.equal(fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8'), '# Owner policy\n');
   assert.equal(config.min_conversations, 7);
   assert.equal(config.enabled, true);
+  assert.equal(config.default_lookback, '24h');
   assert.ok(config.patterns_file);
 });
 
-test('countMessages positive control: counts one header per message, ignores checkpoint prose', async () => {
-  const { countMessages } = await import('../scripts/lib.js');
-  const transcript = [
-    '[Last Checkpoint Summary] something that mentions [2026-09-01 10:00:00] inside prose',
-    '',
-    '[Conversations] (id 1 ~ 3)',
-    '[2026-09-01 10:00:00] IN (telegram:1):',
-    'hello',
-    '',
-    '[2026-09-01 10:01:00] OUT (telegram:1):',
-    'hi',
-    '',
-    '[2026-09-01 10:02:00] IN (lark:group x):',
-    'again',
-    ''
-  ].join('\n');
+test('parseDuration positive and negative controls', async () => {
+  const { parseDuration } = await import('../scripts/lib.js');
 
-  assert.equal(countMessages(transcript), 3);
-  assert.equal(countMessages(''), 0);
-  // Known limitation (documented, out of scope): a header-shaped line at the
-  // start of a message body would be counted as a message.
+  assert.equal(parseDuration('90m'), 90 * 60_000);
+  assert.equal(parseDuration('24h'), 24 * 3_600_000);
+  assert.equal(parseDuration('7d'), 7 * 86_400_000);
+  assert.equal(parseDuration(' 2D '), 2 * 86_400_000);
+  for (const bad of ['', '24', 'h', '1w', '0d', '-1h', 24]) {
+    assert.throws(() => parseDuration(bad), /Invalid lookback/, `should reject ${JSON.stringify(bad)}`);
+  }
 });
