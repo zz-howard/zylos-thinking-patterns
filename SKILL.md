@@ -88,16 +88,17 @@ Outer layer, in the main session:
    ```bash
    node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js fetch --lookback 24h --task daily [--policy <name>]
    ```
-2. Parse the JSON output. `window` is the UTC time range that was fetched; `count` is the number of messages after the policy's channel filter; `filters` echoes the include/exclude lists that were applied and `filtered_out` how many in-window messages they removed; `truncated: true` means the window held more than `max_conversations` messages and the oldest part was not fetched (mention it in the summary). `patterns` summarizes the target file: `next_number`, `entry_count`, and the current `domains` / `types` distribution.
+2. Parse the JSON output. `window` is the UTC time range that was fetched; `count` is the number of messages after the policy's channel filter; `filters` echoes the include/exclude lists that were applied and `filtered_out` how many in-window messages they removed; `truncated: true` means the window held more than `max_conversations` messages and the oldest part was not fetched (mention it in the summary). `patterns` summarizes the target file: `next_number`, `entry_count`, the current `domains` / `types` distribution, and `entries` — an index of every existing entry (`number`, `title`, `domain`, `type`, `reinforced` count). `policy_placeholders` lists the policy sections that still contain the template's `(fill in` marker.
 3. If `status` is `skip` (pass the same `--policy` if one was given):
    ```bash
    node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js commit --result skip --task daily --lookback 24h --window-end "<window.end>"
    ```
    If `reason` is `unconfigured`, relay the `owner_action` text to the owner through the normal reply channel. Then stop. Do not edit any file.
+   If `status` is `ready` but `policy_placeholders` is not empty, the run proceeds; treat those sections as unanswered (do not act on placeholder prose) and add one line to the run summary asking the owner to fill them in.
 4. Read, in this order:
    - the owner's policy: `policy_file` from the fetch JSON;
    - the methodology: `methodology_file` from the fetch JSON;
-   - the current pattern file: `patterns.patterns_file` from the fetch JSON (may not exist yet). `patterns.next_number` is the number for the next new entry.
+   - the current pattern file: `patterns.patterns_file` from the fetch JSON (may not exist yet). `patterns.next_number` is the number for the next new entry. Use `patterns.entries` as the index: screen each candidate against titles and `[Domain | Type]` tags first, then read in full only the entries that could match, instead of re-reading the whole file every run.
 5. Analyze `conversations` following the methodology: detect decision moments → extract cues and rationale → induce candidates → check each against the existing file (reinforce, flag contradiction, or new entry) → apply the quality bar. Extracting nothing is a normal outcome. Overlap with an earlier run is expected when the lookback exceeds the interval: an event already recorded or reinforced in the file is not recorded again.
 6. Write according to the policy's **Confirmation** mode:
    - *record and notify*: append new entries and Reinforced blocks to the pattern file, then send the run summary to the policy's **Notification** endpoint.

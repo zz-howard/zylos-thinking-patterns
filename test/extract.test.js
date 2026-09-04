@@ -373,7 +373,58 @@ test('inspect reports entry count, max number and next number from the pattern f
   assert.equal(result.patterns.reinforced_count, 1);
   assert.deepEqual(result.patterns.domains, { Process: 2, Architecture: 1 });
   assert.deepEqual(result.patterns.types, { Constraint: 2, Heuristic: 1 });
+  assert.deepEqual(result.patterns.entries, [
+    { number: 1, title: 'First', domain: 'Process', type: 'Constraint', reinforced: 1 },
+    { number: 7, title: 'Seventh', domain: 'Architecture', type: 'Constraint', reinforced: 0 },
+    { number: 4, title: 'Fourth', domain: 'Process', type: 'Heuristic', reinforced: 0 }
+  ]);
   assert.equal(result.policy_unconfigured, false);
+  assert.deepEqual(result.policy_placeholders, []);
+});
+
+test('entry index survives an entry without a tag line and carries into fetch', () => {
+  const { patternsFile, env } = setup(makeRows([30, 10]));
+  fs.writeFileSync(patternsFile, '# P\n\n## 1. Untagged entry\n\nsome prose\n\n## 2. Tagged  \n`[Domain: People | Type: Signal]`\n**Reinforced (2026-09-01)**: a\n**Reinforced (2026-09-03)**: b\n');
+
+  const fetch = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(fetch.status, 'ready');
+  assert.deepEqual(fetch.patterns.entries, [
+    { number: 1, title: 'Untagged entry', domain: null, type: null, reinforced: 0 },
+    { number: 2, title: 'Tagged', domain: 'People', type: 'Signal', reinforced: 2 }
+  ]);
+  assert.equal(fetch.patterns.reinforced_count, 2);
+  assert.deepEqual(fetch.patterns.domains, { People: 1 });
+  assert.equal(fetch.patterns.next_number, 3);
+});
+
+test('fetch reports policy sections that still hold template placeholders, without skipping', () => {
+  const { dataDir, patternsFile, env } = setup(makeRows([30, 10]));
+  fs.writeFileSync(path.join(dataDir, 'policy.md'), [
+    '# Policy', '',
+    '## Subject', 'Subject: the owner', '',
+    '## Target', `Patterns file: ${patternsFile}`, '',
+    '## Domains', 'Domains: (fill in)', '',
+    '## Confirmation', 'Confirmation: record and notify me', '',
+    '## Notification', 'Notification: (fill in)', 'still (fill in) — counted once per section', '',
+    '## Extra guidance', 'Guidance: nothing special', ''
+  ].join('\n'));
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.policy_placeholders, ['Domains', 'Notification']);
+  assert.deepEqual(JSON.parse(runNode(EXTRACT, ['inspect'], env)).policy_placeholders, ['Domains', 'Notification']);
+  assert.deepEqual(JSON.parse(runNode(EXTRACT, ['status'], env)).policy_placeholders, ['Domains', 'Notification']);
+});
+
+test('a fully filled-in policy reports no placeholders; the untouched template reports every section', async () => {
+  const { policyPlaceholders, POLICY_TEMPLATE } = await import('../scripts/lib.js');
+  const { env } = setup(makeRows([30, 10]));
+
+  assert.deepEqual(JSON.parse(runNode(EXTRACT, ['fetch'], env)).policy_placeholders, []);
+  assert.deepEqual(policyPlaceholders(POLICY_TEMPLATE), ['Subject', 'Target', 'Sources', 'Domains', 'Confirmation', 'Notification', 'Extra guidance']);
+  assert.deepEqual(policyPlaceholders('## A\nfilled\n## B\nFill in later\n'), [], 'only the literal "(fill in" marker counts');
 });
 
 test('inspect on a missing pattern file starts numbering at 1', () => {
@@ -695,13 +746,13 @@ test('parsePolicy positive and negative controls', async () => {
   const { parsePolicy } = await import('../scripts/lib.js');
 
   const full = parsePolicy('## Target\nPatterns file: ~/a.md\n## Sources\nChannels: telegram, lark\nExclude channels: system\n');
-  assert.deepEqual(full, { patterns_file: '~/a.md', channels: ['telegram', 'lark'], exclude_channels: ['system'] });
+  assert.deepEqual(full, { patterns_file: '~/a.md', channels: ['telegram', 'lark'], exclude_channels: ['system'], placeholders: [] });
 
   const bare = parsePolicy('# Policy\nSubject: x\n');
-  assert.deepEqual(bare, { patterns_file: null, channels: null, exclude_channels: ['system', 'void'] });
+  assert.deepEqual(bare, { patterns_file: null, channels: null, exclude_channels: ['system', 'void'], placeholders: [] });
 
   const placeholders = parsePolicy('Patterns file: (fill in, e.g. ~/x.md)\nChannels: all\nExclude channels: none\n');
-  assert.deepEqual(placeholders, { patterns_file: null, channels: null, exclude_channels: [] });
+  assert.deepEqual(placeholders, { patterns_file: null, channels: null, exclude_channels: [], placeholders: [] }, 'placeholder lines outside any ## section are not attributed');
 
   // A blank Exclude line means "nothing excluded", not the default.
   assert.deepEqual(parsePolicy('Exclude channels:\n').exclude_channels, []);

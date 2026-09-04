@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Policy owns the target file: `## Target` → `Patterns file:` line in `policy.md` replaces `patterns_file` in `config.json` (post-upgrade moves an existing value across; runs skip as `unconfigured` until the line exists).
 - Multiple subjects: `policy-<name>.md` selected with `--policy <name>` on every command; scheduler tasks for it are named `thinking-patterns-<name>[-<task>]`.
 - Policy `## Sources` carries two machine-read lines, `Channels:` and `Exclude channels:` (default exclude `system, void`), applied by `fetch` as a coarse channel filter and echoed back as `filters` / `filtered_out`.
-- `inspect` / `fetch` report the pattern file's Domain and Type distribution.
+- `inspect` / `fetch` report the pattern file's Domain and Type distribution and an entry index (`patterns.entries`: number, title, tag, reinforcement count) so the agent screens candidates against the index before reading entries in full.
+- `fetch` / `inspect` / `status` report `policy_placeholders`: policy sections that still contain the template's `(fill in` marker, for the agent to relay to the owner; the run itself proceeds.
 
 ### Fixed
 - CLI output is written synchronously so a large transcript (a 7d window) is not truncated on a pipe.

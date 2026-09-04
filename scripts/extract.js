@@ -83,6 +83,7 @@ function policySummary(policy) {
     policy: policy.policy,
     policy_file: policy.policy_file,
     policy_unconfigured: policy.unconfigured,
+    policy_placeholders: policy.placeholders,
     filters: { channels: policy.channels, exclude_channels: policy.exclude_channels },
     patterns: inspectPatternsFile(policy.patterns_file)
   };

@@ -79,7 +79,7 @@ The target pattern file is not in config: it is the policy's `Patterns file` lin
 
 A recurring scheduler task dispatches the skill. The main session launches a **background subagent** and only marks the task done afterwards. The subagent:
 
-1. `extract.js fetch --lookback <d> --task <name> [--policy <p>]` — asks comm-bridge for the newest rows, keeps those inside the lookback window, applies the policy's channel filter (echoed back as `filters` / `filtered_out`), checks the threshold and the policy marker, and summarizes the target file (next entry number, Domain/Type distribution).
+1. `extract.js fetch --lookback <d> --task <name> [--policy <p>]` — asks comm-bridge for the newest rows, keeps those inside the lookback window, applies the policy's channel filter (echoed back as `filters` / `filtered_out`), checks the threshold and the policy marker, reports policy sections still holding template placeholders (`policy_placeholders`), and summarizes the target file (next entry number, Domain/Type distribution, and an index of existing entries by number, title and tag so de-duplication starts from the index rather than a full re-read).
 2. Reads `policy.md`, `references/methodology.md`, and the current pattern file.
 3. Applies the methodology: detect decision moments → extract cues and rationale → induce candidates → reinforce an existing entry, flag a contradiction, or create a new numbered entry → apply the quality bar. Extracting nothing is a normal outcome.
 4. Writes (or holds candidates) per the policy's confirmation mode and notifies the owner's endpoint if the policy asks for it.
@@ -92,7 +92,7 @@ See [`SKILL.md`](./SKILL.md) for the exact workflow and write boundary, and [`re
 ```bash
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js fetch [--lookback 24h] [--task name] [--policy name]
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js commit --result skip|no_change|updated [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS"]
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js inspect [--policy name]   # policy filters, pattern file: entry count, next number, Domain/Type distribution
+node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js inspect [--policy name]   # policy filters/placeholders, pattern file: entry index, next number, Domain/Type distribution
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js status [--policy name]    # config + state + policy + patterns
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template [--policy | --policy name] [--lookback 24h] [--task name] [--cron "..."] [--json]
 ```

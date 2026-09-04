@@ -162,6 +162,29 @@ function channelList(value) {
   return value.split(',').map(s => s.trim()).filter(Boolean);
 }
 
+// Sections (by "## Heading") that still contain a "(fill in" placeholder from
+// the template — the owner filled the policy in only partly. Reported so the
+// agent can remind the owner instead of guessing from placeholder prose.
+const PLACEHOLDER_ANYWHERE = /\(fill in/i;
+export function policyPlaceholders(text) {
+  const sections = [];
+  let current = null;
+  let flagged = false;
+  for (const line of text.split('\n')) {
+    const heading = line.match(/^##\s+(.+?)\s*$/);
+    if (heading) {
+      current = heading[1];
+      flagged = false;
+      continue;
+    }
+    if (!flagged && current !== null && PLACEHOLDER_ANYWHERE.test(line)) {
+      sections.push(current);
+      flagged = true;
+    }
+  }
+  return sections;
+}
+
 // Machine-readable lines of an owner policy. Everything else in the file is
 // prose for the agent. `channels` null = all; `exclude_channels` defaults to
 // DEFAULT_EXCLUDE_CHANNELS when the line is absent.
@@ -172,13 +195,14 @@ export function parsePolicy(text) {
     channels: channelList(policyLine(text, 'Channels')),
     exclude_channels: excludeLine === null && !/^Exclude channels:/mi.test(text)
       ? [...DEFAULT_EXCLUDE_CHANNELS]
-      : (channelList(excludeLine) ?? [])
+      : (channelList(excludeLine) ?? []),
+    placeholders: policyPlaceholders(text)
   };
 }
 
 export function readPolicy(policy = DEFAULT_POLICY) {
   const file = policyPath(policy);
-  if (!fs.existsSync(file)) return { policy, policy_file: file, exists: false, unconfigured: true, patterns_file: null, channels: null, exclude_channels: [] };
+  if (!fs.existsSync(file)) return { policy, policy_file: file, exists: false, unconfigured: true, patterns_file: null, channels: null, exclude_channels: [], placeholders: [] };
   const text = fs.readFileSync(file, 'utf8');
   return { policy, policy_file: file, exists: true, unconfigured: text.includes(UNCONFIGURED_MARKER), ...parsePolicy(text) };
 }
@@ -289,10 +313,12 @@ export function policyIsUnconfigured(policyPath = POLICY_PATH) {
 
 // Pattern-file introspection. Entries are "## <N>. Title" headings; the next
 // number is always max + 1, read from the file rather than from state, so a
-// hand-edited file stays authoritative.
-const ENTRY_HEADING = /^## (\d+)\. /gm;
-const REINFORCED = /^\*\*Reinforced \(/gm;
-const TAG = /^`\[Domain: ([^|\]]+?)\s*\|\s*Type: ([^\]]+?)\s*\]`/gm;
+// hand-edited file stays authoritative. The entry index (number, title, tag,
+// reinforcement count) lets the agent screen candidates against the file by
+// title and tag first and read only the entries that match.
+const ENTRY_HEADING = /^## (\d+)\.\s+(.*?)\s*$/;
+const REINFORCED = /^\*\*Reinforced \(/;
+const TAG = /^`\[Domain: ([^|\]]+?)\s*\|\s*Type: ([^\]]+?)\s*\]`/;
 
 function tally(values) {
   const counts = {};
@@ -300,27 +326,47 @@ function tally(values) {
   return Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
 }
 
+export function parsePatternEntries(text) {
+  const entries = [];
+  let current = null;
+  for (const line of text.split('\n')) {
+    const heading = line.match(ENTRY_HEADING);
+    if (heading) {
+      current = { number: Number(heading[1]), title: heading[2], domain: null, type: null, reinforced: 0 };
+      entries.push(current);
+      continue;
+    }
+    if (!current) continue;
+    const tag = line.match(TAG);
+    if (tag && current.domain === null) {
+      current.domain = tag[1].trim();
+      current.type = tag[2].trim();
+    } else if (REINFORCED.test(line)) {
+      current.reinforced += 1;
+    }
+  }
+  return entries;
+}
+
+const EMPTY_PATTERNS = { exists: false, entry_count: 0, max_number: 0, next_number: 1, reinforced_count: 0, domains: {}, types: {}, entries: [] };
+
 export function inspectPatternsFile(patternsFile) {
-  if (!patternsFile) {
-    return { patterns_file: null, exists: false, entry_count: 0, max_number: 0, next_number: 1, reinforced_count: 0, domains: {}, types: {} };
-  }
+  if (!patternsFile) return { patterns_file: null, ...EMPTY_PATTERNS };
   const resolved = expandHome(patternsFile);
-  if (!fs.existsSync(resolved)) {
-    return { patterns_file: resolved, exists: false, entry_count: 0, max_number: 0, next_number: 1, reinforced_count: 0, domains: {}, types: {} };
-  }
-  const text = fs.readFileSync(resolved, 'utf8');
-  const numbers = [...text.matchAll(ENTRY_HEADING)].map(m => Number(m[1]));
-  const maxNumber = numbers.length ? Math.max(...numbers) : 0;
-  const tags = [...text.matchAll(TAG)];
+  if (!fs.existsSync(resolved)) return { patterns_file: resolved, ...EMPTY_PATTERNS };
+  const entries = parsePatternEntries(fs.readFileSync(resolved, 'utf8'));
+  const maxNumber = entries.reduce((max, e) => Math.max(max, e.number), 0);
+  const tagged = entries.filter(e => e.domain !== null);
   return {
     patterns_file: resolved,
     exists: true,
-    entry_count: numbers.length,
+    entry_count: entries.length,
     max_number: maxNumber,
     next_number: maxNumber + 1,
-    reinforced_count: [...text.matchAll(REINFORCED)].length,
-    domains: tally(tags.map(m => m[1].trim())),
-    types: tally(tags.map(m => m[2].trim()))
+    reinforced_count: entries.reduce((sum, e) => sum + e.reinforced, 0),
+    domains: tally(tagged.map(e => e.domain)),
+    types: tally(tagged.map(e => e.type)),
+    entries
   };
 }
 
