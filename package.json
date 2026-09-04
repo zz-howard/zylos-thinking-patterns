@@ -1,0 +1,30 @@
+{
+  "name": "zylos-thinking-patterns",
+  "version": "0.0.0",
+  "description": "Thinking-pattern extraction component for Zylos agents: distill decision heuristics from daily conversations.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "homepage": "https://github.com/zz-howard/zylos-thinking-patterns#readme",
+  "bugs": {
+    "url": "https://github.com/zz-howard/zylos-thinking-patterns/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zz-howard/zylos-thinking-patterns.git"
+  },
+  "keywords": [
+    "zylos",
+    "zylos-component",
+    "thinking-patterns",
+    "decision-making",
+    "agent"
+  ],
+  "author": "Zylos AI",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {}
+}
