@@ -23,3 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - CLI output is written synchronously so a large transcript (a 7d window) is not truncated on a pipe.
+- The printed scheduler registration command single-quotes the prompt: its backticks and double quotes are data, so registering a task no longer runs `fetch` in the shell or alters the prompt (review finding; covered by a fake-shell end-to-end test).
+- Post-upgrade no longer drops `patterns_file` from config when `policy.md` is missing; the value stays until a policy exists and is migrated then.
+- Policy lines are read only inside their own sections (`Patterns file:` under `## Target`, channel lines under `## Sources`), so owner prose elsewhere cannot be mistaken for configuration.
+- The comm-bridge call uses a 64 MiB output buffer; a full 300-row page of long messages no longer fails with ENOBUFS.
+- `truncated` is exact: fetch reads one row beyond `max_conversations` as a sentinel and reports truncation only when that row lies inside the window.
+- README states that the pre-upgrade backup hook is not invoked by the current core upgrade pipeline.

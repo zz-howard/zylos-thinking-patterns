@@ -47,7 +47,7 @@ Installation creates the data directory with a policy **template**. Until the ow
    ```bash
    node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template --policy
    ```
-   Two lines of the policy are machine-read; everything else is prose for you:
+   Two lines of the policy are machine-read, each only inside its own section (the same words under any other heading are prose); everything else is prose for you:
    - `## Target` → `Patterns file: <path>` — the only file the workflow may write. Without this line every run skips as `unconfigured`. If the file already contains numbered entries in the methodology's format, extraction continues from its highest number.
    - `## Sources` → `Channels: all|<list>` and `Exclude channels: <list>|none` — a coarse filter on the C4 channel applied by `fetch` (default when the exclude line is absent: `system, void`). Which groups, topics or people count is written in prose and is your judgment.
 2. Optionally adjust `min_conversations`, `max_conversations`, `default_lookback` in `~/zylos/components/thinking-patterns/config.json`. The target file is **not** in config.
@@ -63,7 +63,7 @@ Every scheduled task carries its own run interval and lookback. **Whenever you s
 2. **How far back should each run look?** The lookback, e.g. `24h` or `7d`. Default suggestion: equal to the run interval. Shorter than the interval leaves gaps; longer overlaps previous runs, which is harmless because the methodology de-duplicates against the pattern file.
 3. **A short task name** — only needed when this is not the first task (e.g. `daily`, `weekly`). Several tasks may run with different lookbacks (a daily 24h pass plus a weekly 7d pass that catches cross-day patterns); they share the one policy and pattern file. When more than one policy file exists, also ask **which policy** the task is for (`--policy <name>`; the task is then named `thinking-patterns-<policy>[-<task>]`).
 
-Then print the registration command with the owner's values and run it (the prompt must be used verbatim):
+Then print the registration command with the owner's values and run it exactly as printed — the prompt is single-quoted so its backticks and quotes reach the scheduler verbatim; do not re-wrap it in double quotes:
 
 ```bash
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template --lookback 24h --task daily --cron "50 23 * * *"

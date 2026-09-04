@@ -42,7 +42,7 @@ Three decisions belong to the owner; the agent asks and writes them down.
    ```bash
    node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template --policy
    ```
-   The policy is prose for the agent except for three lines that the script reads:
+   The policy is prose for the agent except for three lines that the script reads, each only inside its own section (the same words elsewhere in the file are treated as prose):
    - `Patterns file: <path>` under `## Target` — the only file the workflow ever writes. An existing file in the methodology's entry format is picked up as-is; numbering continues from its highest entry.
    - `Channels: all|<list>` and `Exclude channels: <list>|none` under `## Sources` — a coarse filter on the C4 channel applied at fetch time. When the exclude line is absent, `system` and `void` (scheduler notices, the agent's own memos) are excluded. Anything finer — groups, topics, people — stays prose and is the agent's judgment.
 2. **Threshold.** Optionally set `min_conversations`, `max_conversations`, `default_lookback` in `config.json`.
@@ -73,7 +73,7 @@ A second subject (another person, role or domain) is a second policy file, `poli
 - `max_conversations` — the most messages a single run will read; when a window holds more, the oldest part is left out and the fetch result says `truncated: true`.
 - `default_lookback` — used when a task does not pass `--lookback`. Each scheduled task normally carries its own.
 
-The target pattern file is not in config: it is the policy's `Patterns file` line (an older `patterns_file` in config is moved there by the post-upgrade hook).
+The target pattern file is not in config: it is the policy's `Patterns file` line. An older `patterns_file` in config is moved there by the post-upgrade hook once a `policy.md` exists; until then it stays in config untouched.
 
 ## Runtime Model
 
@@ -101,7 +101,7 @@ Every command prints JSON except `template`, which prints text unless `--json` i
 
 ## State
 
-`state.json` records `last_run_at`, `last_result`, `last_update_at`, and `last_window` (task, policy, lookback, window end). There is no cursor: each run is defined by its own window. Each commit appends one line to `logs/runs.jsonl`. `config.json`, `policy.md`, `state.json`, `logs/` and `backups/` are preserved across upgrades; `pre-upgrade` snapshots the first three into `backups/<timestamp>/`.
+`state.json` records `last_run_at`, `last_result`, `last_update_at`, and `last_window` (task, policy, lookback, window end). There is no cursor: each run is defined by its own window. Each commit appends one line to `logs/runs.jsonl`. `config.json`, `policy.md`, `state.json`, `logs/` and `backups/` are preserved across upgrades. The `pre-upgrade` hook copies the first three into `backups/<timestamp>/`, but the current `zylos upgrade` pipeline does not invoke component pre-upgrade hooks (zylos-core takes its own backup); run `node hooks/pre-upgrade.js` by hand if you want this component's snapshot.
 
 ## Design Note
 

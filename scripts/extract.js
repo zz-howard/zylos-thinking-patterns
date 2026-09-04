@@ -137,14 +137,17 @@ function commandFetch(args) {
   }
 
   const c4DbCli = requireScript(config.c4_db_cli, 'c4-db.js');
-  const recent = recentRows(c4DbCli, maxConversations);
+  // One row beyond the cap is a sentinel: if it exists and lies inside the
+  // window, older in-window rows exist that this run will not read. It is
+  // never part of the transcript.
+  const page = recentRows(c4DbCli, maxConversations + 1);
+  const sentinel = page.length > maxConversations ? page[0] : null;
+  const recent = sentinel ? page.slice(1) : page;
+  const truncated = sentinel !== null && sentinel._ms >= beginMs && sentinel._ms <= endMs;
   const inWindow = recent.filter(row => row._ms >= beginMs && row._ms <= endMs);
   const include = policy.channels === null ? null : new Set(policy.channels);
   const exclude = new Set(policy.exclude_channels);
   const rows = inWindow.filter(row => (include === null || include.has(row.channel)) && !exclude.has(row.channel));
-  // If the cap returned a full page and its oldest row is already inside the
-  // window, older in-window rows exist that this run cannot see.
-  const truncated = recent.length >= maxConversations && inWindow.length === recent.length;
   const envelope = { ...base, count: rows.length, filtered_out: inWindow.length - rows.length, truncated };
 
   if (rows.length < minConversations) {

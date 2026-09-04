@@ -19,7 +19,8 @@ function runNode(script, args = [], env = {}) {
   return execFileSync(process.execPath, [script, ...args], {
     cwd: ROOT,
     env: { ...process.env, ...env },
-    encoding: 'utf8'
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024 // the harness must not be the bottleneck the inbound-buffer test probes
   });
 }
 
@@ -461,8 +462,8 @@ test('template prints the owner questions and a scheduler command carrying lookb
   assert.match(text, /1\. How often should it run\?/);
   assert.match(text, /2\. How far back should each run look\?/);
   assert.match(text, /3\. A short task name/);
-  assert.match(text, /scheduler\/scripts\/cli\.js add "/);
-  assert.match(text, /--cron "0 22 \* \* 0"/);
+  assert.match(text, /scheduler\/scripts\/cli\.js add '/);
+  assert.match(text, /--cron '0 22 \* \* 0'/);
   assert.match(text, /--name thinking-patterns-weekly/);
   assert.match(text, /fetch --lookback 7d --task weekly/);
   assert.match(text, /skills\/thinking-patterns\/SKILL\.md/);
@@ -751,13 +752,133 @@ test('parsePolicy positive and negative controls', async () => {
   const bare = parsePolicy('# Policy\nSubject: x\n');
   assert.deepEqual(bare, { patterns_file: null, channels: null, exclude_channels: ['system', 'void'], placeholders: [] });
 
-  const placeholders = parsePolicy('Patterns file: (fill in, e.g. ~/x.md)\nChannels: all\nExclude channels: none\n');
-  assert.deepEqual(placeholders, { patterns_file: null, channels: null, exclude_channels: [], placeholders: [] }, 'placeholder lines outside any ## section are not attributed');
+  const placeholders = parsePolicy('## Target\nPatterns file: (fill in, e.g. ~/x.md)\n## Sources\nChannels: all\nExclude channels: none\n');
+  assert.deepEqual(placeholders, { patterns_file: null, channels: null, exclude_channels: [], placeholders: ['Target'] });
 
   // A blank Exclude line means "nothing excluded", not the default.
-  assert.deepEqual(parsePolicy('Exclude channels:\n').exclude_channels, []);
+  assert.deepEqual(parsePolicy('## Sources\nExclude channels:\n').exclude_channels, []);
   // Labels are matched at line start only; prose mentioning them does not count.
-  assert.equal(parsePolicy('see the Patterns file: ~/b.md line\n').patterns_file, null);
+  assert.equal(parsePolicy('## Target\nsee the Patterns file: ~/b.md line\n').patterns_file, null);
+  // Labels count only inside their own section: the same line elsewhere is owner prose.
+  const decoy = '## Target\n\n## Sources\nprose\n## Extra guidance\nPatterns file: ~/decoy.md\nChannels: lark\nExclude channels: none\n';
+  assert.deepEqual(parsePolicy(decoy), { patterns_file: null, channels: null, exclude_channels: ['system', 'void'], placeholders: [] });
+  // Section lookup is case-insensitive and stops at the next heading.
+  assert.equal(parsePolicy('## target\nPatterns file: ~/c.md\n## Sources\n').patterns_file, '~/c.md');
+  assert.equal(parsePolicy('## Sources\n## Target\nPatterns file: ~/d.md\n').patterns_file, '~/d.md');
+});
+
+// --- Review findings on df4b1c0 (jinglever, 2026-09-05) ---
+
+// Executes the printed registration line in a real shell against a fake
+// scheduler CLI and a trapped extract.js at the installed paths (HOME is
+// redirected). The scheduler must receive the prompt byte-for-byte and the
+// fetch must never run at registration time.
+function runPrintedRegistration(templateText, home) {
+  const line = templateText.split('\n').find(l => l.startsWith('node ') && l.includes('scheduler/scripts/cli.js add '));
+  assert.ok(line, 'template prints a registration line');
+  const skills = path.join(home, 'zylos/.claude/skills');
+  const argvFile = path.join(home, 'scheduler-argv.json');
+  const trapFile = path.join(home, 'fetch-was-executed');
+  fs.mkdirSync(path.join(skills, 'scheduler/scripts'), { recursive: true });
+  fs.mkdirSync(path.join(skills, 'thinking-patterns/scripts'), { recursive: true });
+  // ESM syntax: the temp tree sits under a package.json with "type": "module".
+  fs.writeFileSync(path.join(skills, 'scheduler/scripts/cli.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)));\n`);
+  fs.writeFileSync(path.join(skills, 'thinking-patterns/scripts/extract.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(trapFile)}, '1'); process.stdout.write('TRANSCRIPT_SENTINEL');\n`);
+  execFileSync('bash', ['-c', line], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+  return { argv: JSON.parse(fs.readFileSync(argvFile, 'utf8')), fetchExecuted: fs.existsSync(trapFile) };
+}
+
+test('printed registration command passes the prompt to the scheduler verbatim and never runs fetch', () => {
+  const { dir, env } = setup(makeRows([10]));
+  const expected = JSON.parse(runNode(EXTRACT, ['template', '--json', '--lookback', '7d', '--task', 'weekly', '--policy', 'work', '--cron', '0 22 * * 0'], env));
+  const text = runNode(EXTRACT, ['template', '--lookback', '7d', '--task', 'weekly', '--policy', 'work', '--cron', '0 22 * * 0'], env);
+
+  const { argv, fetchExecuted } = runPrintedRegistration(text, path.join(dir, 'home'));
+
+  assert.equal(fetchExecuted, false, 'backticks in the prompt must not be command substitution');
+  assert.equal(argv[0], 'add');
+  assert.equal(argv[1], expected.scheduler_prompt, 'prompt byte-for-byte');
+  assert.match(argv[1], /`node .*extract\.js fetch --lookback 7d --task weekly --policy work`/);
+  assert.match(argv[1], /subagent's fetch step/);
+  assert.doesNotMatch(argv[1], /TRANSCRIPT_SENTINEL/);
+  assert.deepEqual(argv.slice(2), ['--cron', '0 22 * * 0', '--priority', '3', '--name', 'thinking-patterns-work-weekly']);
+});
+
+test('shellQuote round-trips quotes, backticks and dollar signs through bash', async () => {
+  const { shellQuote } = await import('../scripts/lib.js');
+  const samples = ["it's", 'say "hi"', '`whoami`', '$HOME and $(id)', "a'b'c", ''];
+  for (const sample of samples) {
+    const out = execFileSync('bash', ['-c', `printf '%s' ${shellQuote(sample)}`], { encoding: 'utf8' });
+    assert.equal(out, sample, `round-trip ${JSON.stringify(sample)}`);
+  }
+});
+
+test('post-upgrade keeps patterns_file in config while policy.md is missing, and migrates it once a policy exists', () => {
+  const { dir, dataDir, env } = setup(makeRows([10]));
+  const target = path.join(dir, 'owner-chosen-patterns.md');
+  writeConfig(dataDir, { min_conversations: 2, patterns_file: target });
+  fs.unlinkSync(path.join(dataDir, 'policy.md'));
+
+  const first = runNode(POST_UPGRADE, [], env);
+  const second = runNode(POST_UPGRADE, [], env);
+  assert.match(first, /stays in config\.json/);
+  assert.match(second, /stays in config\.json/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).patterns_file, target, 'value survives repeated runs without a policy');
+  assert.equal(fs.existsSync(path.join(dataDir, 'policy.md')), false, 'hook does not invent a policy');
+
+  fs.writeFileSync(path.join(dataDir, 'policy.md'), '# Policy\n\nSubject: the owner\n');
+  const third = runNode(POST_UPGRADE, [], env);
+  assert.match(third, /Moved patterns_file/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).patterns_file, undefined);
+  assert.equal(JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.patterns_file, target);
+});
+
+test('post-upgrade ignores a "Patterns file:" line outside ## Target and migrates the real config value', () => {
+  const { dir, dataDir, env } = setup(makeRows([10]));
+  const target = path.join(dir, 'real-patterns.md');
+  writeConfig(dataDir, { patterns_file: target });
+  fs.writeFileSync(path.join(dataDir, 'policy.md'), '# Policy\n\n## Extra guidance\n\nPatterns file: ~/decoy.md is what the old setup used, ignore it\n');
+
+  runNode(POST_UPGRADE, [], env);
+
+  const policy = fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8');
+  assert.match(policy, /## Target\n\nPatterns file: /);
+  assert.equal(JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.patterns_file, target);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).patterns_file, undefined);
+});
+
+test('fetch accepts a C4 response larger than the 1 MiB child-process default', () => {
+  // 300 rows × 4 KB (the allowed max_conversations page) is ~1.3 MB of JSON.
+  const rows = makeRows(Array.from({ length: 300 }, (_, i) => 300 - i));
+  for (const row of rows) row.content = `${row.content} ${'y'.repeat(4000)}`;
+  const { env } = setup(rows, { min_conversations: 1 });
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.count, 300);
+  assert.equal(result.truncated, false);
+  assert.match(result.conversations, /message 1 \(age 300m\) y{4000}\n/);
+});
+
+test('fetch does not flag truncation when the database holds exactly max_conversations in-window rows', () => {
+  const { env } = setup(makeRows([30, 20, 10]), { max_conversations: 3, min_conversations: 1 });
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.count, 3);
+  assert.equal(result.truncated, false);
+  assert.match(result.conversations, /age 30m/);
+});
+
+test('fetch does not flag truncation when the sentinel row lies outside the window', () => {
+  const { env } = setup(makeRows([30 * 60, 30, 20, 10]), { max_conversations: 3, min_conversations: 1 });
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.count, 3);
+  assert.equal(result.truncated, false);
+  assert.doesNotMatch(result.conversations, /age 1800m/);
 });
 
 test('parseDuration positive and negative controls', async () => {

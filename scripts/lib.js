@@ -148,6 +148,17 @@ export function policyPath(policy = DEFAULT_POLICY) {
 
 const PLACEHOLDER = /^\(fill in/i;
 
+// Body of one "## <heading>" section (up to the next "## " heading), or '' when absent.
+export function policySection(text, heading) {
+  const lines = text.split('\n');
+  const start = lines.findIndex(line => new RegExp(`^##\\s+${heading}\\s*$`, 'i').test(line));
+  if (start === -1) return '';
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex(line => /^##\s/.test(line));
+  return (end === -1 ? rest : rest.slice(0, end)).join('\n');
+}
+
+// A "Label: value" line at line start inside `text`; placeholders count as absent.
 function policyLine(text, label) {
   const match = text.match(new RegExp(`^${label}:[ \\t]*(.*)$`, 'mi'));
   if (!match) return null;
@@ -185,15 +196,19 @@ export function policyPlaceholders(text) {
   return sections;
 }
 
-// Machine-readable lines of an owner policy. Everything else in the file is
-// prose for the agent. `channels` null = all; `exclude_channels` defaults to
-// DEFAULT_EXCLUDE_CHANNELS when the line is absent.
+// Machine-readable lines of an owner policy, read only inside their own
+// sections ("Patterns file:" under ## Target; "Channels:" / "Exclude channels:"
+// under ## Sources) so the same words in owner prose elsewhere are ignored.
+// Everything else in the file is prose for the agent. `channels` null = all;
+// `exclude_channels` defaults to DEFAULT_EXCLUDE_CHANNELS when the line is absent.
 export function parsePolicy(text) {
-  const excludeLine = policyLine(text, 'Exclude channels');
+  const target = policySection(text, 'Target');
+  const sources = policySection(text, 'Sources');
+  const excludeLine = policyLine(sources, 'Exclude channels');
   return {
-    patterns_file: policyLine(text, 'Patterns file'),
-    channels: channelList(policyLine(text, 'Channels')),
-    exclude_channels: excludeLine === null && !/^Exclude channels:/mi.test(text)
+    patterns_file: policyLine(target, 'Patterns file'),
+    channels: channelList(policyLine(sources, 'Channels')),
+    exclude_channels: excludeLine === null && !/^Exclude channels:/mi.test(sources)
       ? [...DEFAULT_EXCLUDE_CHANNELS]
       : (channelList(excludeLine) ?? []),
     placeholders: policyPlaceholders(text)
@@ -222,6 +237,12 @@ export function schedulerPrompt(lookback = DEFAULT_CONFIG.default_lookback, task
   return `Run the thinking-patterns skill (task "${task}", lookback ${lookback}${policyNote}). Load and follow ${SKILL_MD_INSTALLED}. Use its required background-subagent execution model; the subagent's fetch step is \`node ${EXTRACT_INSTALLED} fetch --lookback ${lookback} --task ${task}${policyArg}\`, and every commit step must pass \`--task ${task}${policyArg}\`. The main session only orchestrates and marks the scheduler task done after the subagent completes.`;
 }
 
+// POSIX single-quoting: the prompt is data, never shell syntax. Backticks,
+// "$", and double quotes inside it must reach the scheduler byte-for-byte.
+export function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
 export function schedulerTaskName(task = DEFAULT_TASK, policy = DEFAULT_POLICY) {
   const parts = [TASK_NAME_PREFIX];
   if (policy !== DEFAULT_POLICY) parts.push(policy);
@@ -241,7 +262,7 @@ export function schedulerTemplate(lookback = DEFAULT_CONFIG.default_lookback, ta
     '',
     'Then register the task once (values below are examples):',
     '',
-    `node ${SCHEDULER_CLI_INSTALLED} add "${prompt}" --cron "${cron}" --priority 3 --name ${schedulerTaskName(task, policy)}`,
+    `node ${SCHEDULER_CLI_INSTALLED} add ${shellQuote(prompt)} --cron ${shellQuote(cron)} --priority 3 --name ${schedulerTaskName(task, policy)}`,
     '',
     'Print a template for other values with:',
     '',
@@ -302,8 +323,13 @@ export function loadState() {
   return normalizeState(readJson(STATE_PATH, DEFAULT_STATE));
 }
 
+// Node's default maxBuffer is 1 MiB; a capped page of 300 rows can exceed that
+// on its own (300 × 4 KB of content plus JSON framing). 64 MiB leaves room for
+// long messages without letting a runaway response exhaust memory.
+export const RUN_MAX_BUFFER = 64 * 1024 * 1024;
+
 export function run(command, args) {
-  return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: RUN_MAX_BUFFER });
 }
 
 export function policyIsUnconfigured(policyPath = POLICY_PATH) {
