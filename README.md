@@ -62,14 +62,14 @@ A second subject (another person, role or domain) is a second policy file, `poli
 ```json
 {
   "enabled": true,
-  "min_conversations": 30,
+  "min_conversations": 4,
   "max_conversations": 300,
   "default_lookback": "24h",
   "c4_db_cli": "~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js"
 }
 ```
 
-- `min_conversations` — below this many messages inside the window the run is recorded as `skip`.
+- `min_conversations` (default 4, about two exchanges) — below this many in-scope messages inside the window the run is recorded as `skip`. A skipped window is not revisited: the next run looks back its own lookback, so raising this trades quiet days away for good. Extracting nothing from a quiet window is a normal outcome, which is why the default is low.
 - `max_conversations` — the most messages a single run will read, counted after the policy's channel filter; when a window holds more in-scope messages, the oldest are left out and the fetch result says `truncated: true` with `truncated_out` = how many.
 - `max_page_bytes` (default 64 MiB) — the most output this process will parse from one `c4-db.js recent N` call. Pages grow until the window is covered; a page over this bound is discarded unread and fetch works from the previous page (the newest rows), reporting `window_complete: false`, `truncated: true` and `truncated_out: null` (unknown). If even the first page is over the bound, fetch fails with an error naming the knobs. What this bounds is this process's parsing: the comm-bridge CLI still builds the whole page in its own memory and writes it to a private temp file before it is measured — that residual cost is not bounded here.
 - `default_lookback` — used when a task does not pass `--lookback`. Each scheduled task normally carries its own.

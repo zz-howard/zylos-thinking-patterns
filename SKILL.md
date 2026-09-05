@@ -25,8 +25,8 @@ upgrade:
 config:
   optional:
     - name: THINKING_PATTERNS_MIN_CONVERSATIONS
-      description: Minimum conversations inside the lookback window before an extraction run analyzes anything. Stored in component config.json as min_conversations.
-      default: "30"
+      description: Minimum in-scope conversations inside the lookback window before an extraction run analyzes anything; a window below it is skipped and is not revisited by later runs. Stored in component config.json as min_conversations.
+      default: "4"
 
 dependencies:
   - comm-bridge

@@ -23,7 +23,7 @@ export const UNCONFIGURED_MARKER = '<!-- thinking-patterns: UNCONFIGURED -->';
 
 export const DEFAULT_CONFIG = {
   enabled: true,
-  min_conversations: 30,
+  min_conversations: 4,
   max_conversations: 300,
   max_page_bytes: 64 * 1024 * 1024,
   default_lookback: '24h',
