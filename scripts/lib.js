@@ -239,13 +239,21 @@ export function normalizeTaskName(value) {
 export function schedulerPrompt(lookback = DEFAULT_CONFIG.default_lookback, task = DEFAULT_TASK, policy = DEFAULT_POLICY) {
   const policyArg = policy === DEFAULT_POLICY ? '' : ` --policy ${policy}`;
   const policyNote = policy === DEFAULT_POLICY ? '' : `, policy "${policy}"`;
-  return `Run the thinking-patterns skill (task "${task}", lookback ${lookback}${policyNote}). Load and follow ${SKILL_MD_INSTALLED}. Use its required background-subagent execution model; the subagent's fetch step is \`node ${EXTRACT_INSTALLED} fetch --lookback ${lookback} --task ${task}${policyArg}\`, and every commit step must pass \`--task ${task}${policyArg}\`. The main session only orchestrates and marks the scheduler task done after the subagent completes.`;
+  return `Run the thinking-patterns skill (task "${task}", lookback ${lookback}${policyNote}). Load and follow ${SKILL_MD_INSTALLED}. Use its required background-subagent execution model; the subagent's fetch step is \`node ${shellPath(EXTRACT_INSTALLED)} fetch --lookback ${lookback} --task ${task}${policyArg}\`, and every commit step must pass \`--task ${task}${policyArg}\`. The main session only orchestrates and marks the scheduler task done after the subagent completes.`;
 }
 
 // POSIX single-quoting: the prompt is data, never shell syntax. Backticks,
 // "$", and double quotes inside it must reach the scheduler byte-for-byte.
 export function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+// An installed path as one shell argument. Plain path characters stay bare so
+// the default `~/zylos` still expands at the owner's shell; anything else
+// (a ZYLOS_DIR with spaces or quotes) is single-quoted. Display strings in
+// prose are not shell arguments and keep the bare form.
+export function shellPath(value) {
+  return /^[A-Za-z0-9_./~-]+$/.test(value) ? value : shellQuote(value);
 }
 
 export function schedulerTaskName(task = DEFAULT_TASK, policy = DEFAULT_POLICY) {
@@ -267,11 +275,11 @@ export function schedulerTemplate(lookback = DEFAULT_CONFIG.default_lookback, ta
     '',
     'Then register the task once (values below are examples):',
     '',
-    `node ${SCHEDULER_CLI_INSTALLED} add ${shellQuote(prompt)} --cron ${shellQuote(cron)} --priority 3 --name ${schedulerTaskName(task, policy)}`,
+    `node ${shellPath(SCHEDULER_CLI_INSTALLED)} add ${shellQuote(prompt)} --cron ${shellQuote(cron)} --priority 3 --name ${schedulerTaskName(task, policy)}`,
     '',
     'Print a template for other values with:',
     '',
-    `node ${EXTRACT_INSTALLED} template --lookback 7d --task weekly --cron "0 22 * * 0" [--policy <name>]`,
+    `node ${shellPath(EXTRACT_INSTALLED)} template --lookback 7d --task weekly --cron "0 22 * * 0" [--policy <name>]`,
     '',
     'Task description (used verbatim above):',
     '',

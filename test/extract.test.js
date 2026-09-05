@@ -1045,3 +1045,52 @@ test('printed install paths follow ZYLOS_DIR and default to ~/zylos', () => {
   assert.match(standard, /~\/zylos\/\.claude\/skills\/thinking-patterns\/SKILL\.md/);
   assert.match(standard, /~\/zylos\/\.claude\/skills\/scheduler\/scripts\/cli\.js/);
 });
+
+// --- Review finding on c96a048 (jinglever, 2026-09-05): installed paths in shell commands ---
+
+// Runs both printed commands through a real bash with ZYLOS_DIR set to a
+// directory whose name holds a space and a single quote: the registration
+// line, and then the fetch command quoted inside the prompt the scheduler
+// received. Fake scheduler / extract.js at the installed paths only record
+// argv. The default `~/zylos` must stay bare so HOME expansion still happens.
+function runInstalledCommands(zylosDir, home) {
+  const text = runNode(EXTRACT, ['template', '--lookback', '7d', '--task', 'weekly', '--cron', '0 22 * * 0'], { ZYLOS_DIR: zylosDir });
+  const line = text.split('\n').find(l => l.startsWith('node ') && /scheduler\/scripts\/cli\.js'? add /.test(l));
+  assert.ok(line, 'template prints a registration line');
+  const installed = zylosDir === '' ? path.join(home, 'zylos') : zylosDir;
+  const skills = path.join(installed, '.claude/skills');
+  const schedulerArgv = path.join(home, 'scheduler-argv.json');
+  const fetchArgv = path.join(home, 'fetch-argv.json');
+  fs.mkdirSync(path.join(skills, 'scheduler/scripts'), { recursive: true });
+  fs.mkdirSync(path.join(skills, 'thinking-patterns/scripts'), { recursive: true });
+  fs.writeFileSync(path.join(installed, 'package.json'), '{"type":"module"}\n');
+  fs.writeFileSync(path.join(skills, 'scheduler/scripts/cli.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(schedulerArgv)}, JSON.stringify(process.argv.slice(2)));\n`);
+  fs.writeFileSync(path.join(skills, 'thinking-patterns/scripts/extract.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(fetchArgv)}, JSON.stringify(process.argv.slice(2)));\n`);
+  const env = { ...process.env, HOME: home };
+  execFileSync('bash', ['-c', line], { env, encoding: 'utf8' });
+  const argv = JSON.parse(fs.readFileSync(schedulerArgv, 'utf8'));
+  const fetchCommand = argv[1].match(/`(node [^`]*extract\.js'? fetch[^`]*)`/);
+  assert.ok(fetchCommand, 'prompt carries the fetch command in backticks');
+  execFileSync('bash', ['-c', fetchCommand[1]], { env, encoding: 'utf8' });
+  return { argv, fetchArgv: JSON.parse(fs.readFileSync(fetchArgv, 'utf8')) };
+}
+
+test('printed commands run when ZYLOS_DIR holds a space and a single quote, and with the ~/zylos default', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'thinking-patterns-quote-'));
+  const cases = [
+    { name: 'default', zylosDir: '' },
+    { name: 'plain', zylosDir: path.join(root, 'plain/zylos') },
+    { name: 'space', zylosDir: path.join(root, 'zylos space') },
+    { name: 'quote', zylosDir: path.join(root, "it's a dir/zylos") }
+  ];
+  for (const c of cases) {
+    const home = path.join(root, `home-${c.name}`);
+    fs.mkdirSync(home, { recursive: true });
+    const { argv, fetchArgv } = runInstalledCommands(c.zylosDir, home);
+    assert.equal(argv[0], 'add', c.name);
+    assert.deepEqual(argv.slice(2), ['--cron', '0 22 * * 0', '--priority', '3', '--name', 'thinking-patterns-weekly'], c.name);
+    assert.deepEqual(fetchArgv, ['fetch', '--lookback', '7d', '--task', 'weekly'], c.name);
+    const expected = JSON.parse(runNode(EXTRACT, ['template', '--json', '--lookback', '7d', '--task', 'weekly', '--cron', '0 22 * * 0'], { ZYLOS_DIR: c.zylosDir })).scheduler_prompt;
+    assert.equal(argv[1], expected, `${c.name}: prompt byte-for-byte`);
+  }
+});
