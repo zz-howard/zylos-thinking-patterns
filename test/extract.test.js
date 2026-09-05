@@ -915,6 +915,49 @@ test('setPolicyTarget positive and negative controls', async () => {
   assert.equal(setPolicyTarget(decoy, '~/t.md'), `${decoy}\n## Target\n\nPatterns file: ~/t.md\n`);
 });
 
+test('post-upgrade leaves policy.md byte-identical and keeps config patterns_file when the atomic write fails', () => {
+  // Fault injection: a directory squatting on the sibling temp path makes the
+  // temp-file write fail before rename. A truncate-and-write of policy.md would
+  // not notice and would clear config; the atomic path must do neither.
+  const { dir, dataDir, env } = setup(makeRows([10]));
+  const target = path.join(dir, 'legacy-patterns.md');
+  writeConfig(dataDir, { patterns_file: target });
+  const policyPath = path.join(dataDir, 'policy.md');
+  const original = '# Policy\n\nSubject: the owner\nConfirmation: record silently\n\n## Sources\n\nChannels: all\n';
+  fs.writeFileSync(policyPath, original);
+  fs.mkdirSync(`${policyPath}.tmp`);
+
+  const output = runNode(POST_UPGRADE, [], env);
+
+  assert.match(output, /policy\.md left untouched/);
+  assert.doesNotMatch(output, /Moved patterns_file/);
+  assert.equal(fs.readFileSync(policyPath, 'utf8'), original, 'original policy bytes untouched');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).patterns_file, target, 'config keeps the target');
+  assert.equal(JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.patterns_file, null);
+
+  // Once the obstacle is gone the same hook completes the migration and leaves no temp file.
+  fs.rmdirSync(`${policyPath}.tmp`);
+  assert.match(runNode(POST_UPGRADE, [], env), /Moved patterns_file/);
+  assert.equal(fs.existsSync(`${policyPath}.tmp`), false);
+  assert.equal(JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.patterns_file, target);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).patterns_file, undefined);
+});
+
+test('atomicWriteText replaces via sibling temp + rename and cleans up on failure', async () => {
+  const { atomicWriteText } = await import('../scripts/lib.js');
+  const dir = tmpDir();
+  const file = path.join(dir, 'owner.md');
+  fs.writeFileSync(file, 'v1\n');
+
+  atomicWriteText(file, 'v2\n');
+  assert.equal(fs.readFileSync(file, 'utf8'), 'v2\n');
+  assert.equal(fs.existsSync(`${file}.tmp`), false);
+
+  fs.mkdirSync(`${file}.tmp`);
+  assert.throws(() => atomicWriteText(file, 'v3\n'));
+  assert.equal(fs.readFileSync(file, 'utf8'), 'v2\n', 'failure leaves the file untouched');
+});
+
 test('fetch accepts a C4 response larger than the 1 MiB child-process default', () => {
   // 300 rows × 4 KB (the allowed max_conversations page) is ~1.3 MB of JSON.
   const rows = makeRows(Array.from({ length: 300 }, (_, i) => 300 - i));

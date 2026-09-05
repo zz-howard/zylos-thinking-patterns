@@ -325,6 +325,22 @@ export function atomicWriteJson(filePath, value) {
   fs.renameSync(tmpPath, filePath);
 }
 
+// Atomic replacement of an owner-authored text file: write a sibling temp file
+// (deterministic name, single writer) and rename it over the original, so an
+// interrupted write leaves the original bytes untouched. Throws on failure and
+// removes the temp file when it can.
+export function atomicWriteText(filePath, text) {
+  ensureDir(path.dirname(filePath));
+  const tmpPath = `${filePath}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, text);
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
+    throw err;
+  }
+}
+
 export function writeIfMissing(filePath, content) {
   if (fs.existsSync(filePath)) return false;
   ensureDir(path.dirname(filePath));

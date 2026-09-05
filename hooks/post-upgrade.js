@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 // post-upgrade: migrate config/state to the current schema. Owner prose in policy.md is
-// never rewritten; the only policy edit is appending a missing "## Target" section when
-// the target file used to live in config.json (schema 1).
+// never rewritten; the only policy edit is placing the schema-1 config.json patterns_file
+// into "## Target" — replacing that section's placeholder "Patterns file:" line, inserting
+// the line when the section has none, or appending the section when it is missing. The
+// policy is replaced atomically (temp file + rename) and config gives up its copy only
+// after that rename succeeded.
 
 import fs from 'node:fs';
 import {
   CONFIG_PATH, STATE_PATH, POLICY_PATH,
   DEFAULT_CONFIG, DEFAULT_STATE,
-  readJson, atomicWriteJson, normalizeState, policyIsUnconfigured, parsePolicy, setPolicyTarget
+  readJson, atomicWriteJson, atomicWriteText, normalizeState, policyIsUnconfigured, parsePolicy, setPolicyTarget
 } from '../scripts/lib.js';
 
 console.log('[post-upgrade] Migrating thinking-patterns config/state...');
@@ -30,12 +33,20 @@ if (typeof config.patterns_file === 'string' && config.patterns_file.trim()) {
       // then read the result back: config gives up its value only once the
       // policy actually resolves to the same target.
       const after = setPolicyTarget(before, target);
-      if (parsePolicy(after).patterns_file === target) {
-        fs.writeFileSync(POLICY_PATH, after);
-        console.log(`Moved patterns_file from config.json into policy.md (## Target): ${target}`);
-        delete config.patterns_file;
-      } else {
+      if (parsePolicy(after).patterns_file !== target) {
         console.log(`Could not place patterns_file ${target} into policy.md ## Target; it stays in config.json — set "Patterns file:" under ## Target yourself`);
+      } else {
+        let written = false;
+        try {
+          atomicWriteText(POLICY_PATH, after);
+          written = true;
+        } catch (err) {
+          console.log(`Failed to replace policy.md atomically (${err.message}); policy.md left untouched and patterns_file stays in config.json`);
+        }
+        if (written) {
+          console.log(`Moved patterns_file from config.json into policy.md (## Target): ${target}`);
+          delete config.patterns_file;
+        }
       }
     }
   }
