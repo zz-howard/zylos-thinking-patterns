@@ -973,8 +973,9 @@ test('atomicWriteText applies the original mode before writing, independent of u
 
   atomicWriteText(file, 'v2\n');
 
-  // The final file is the renamed temp file (new inode), and its bits were set
-  // before content was written, so the temp stage never exposed the text wider.
+  // The final file is the renamed temp file (new inode) carrying the original's
+  // bits. This proves the end state only; the write-time ordering is proven by
+  // the fd-observing test below.
   assert.notEqual(fs.statSync(file).ino, before);
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(fs.readFileSync(file, 'utf8'), 'v2\n');
@@ -992,6 +993,41 @@ test('atomicWriteText applies the original mode before writing, independent of u
   assert.equal(fs.readFileSync(decoy, 'utf8'), 'decoy\n', 'symlink target untouched');
   assert.equal(fs.readFileSync(file, 'utf8'), 'v4\n');
   assert.equal(fs.lstatSync(file).isSymbolicLink(), false);
+});
+
+test('atomicWriteText has the original mode on the fd at the moment content is written', async () => {
+  const { atomicWriteText } = await import('../scripts/lib.js');
+  const dir = tmpDir();
+  const file = path.join(dir, 'owner.md');
+  fs.writeFileSync(file, 'v1\n');
+
+  // Observe the temp fd's mode from inside the write primitive, before any
+  // content reaches the file. lib.js resolves fs.writeFileSync at call time on
+  // the shared module object, so this wrapper sees exactly its write.
+  const seen = [];
+  const realWriteFileSync = fs.writeFileSync;
+  fs.writeFileSync = function observed(target, ...rest) {
+    if (typeof target === 'number') seen.push(fs.fstatSync(target).mode & 0o777);
+    return realWriteFileSync.call(fs, target, ...rest);
+  };
+  const oldUmask = process.umask(0o077);
+  try {
+    // Under umask 077 an open() with mode 0640 yields 0600, so a write that
+    // happens before fchmod is observed at 0600; a write after it at 0640.
+    fs.chmodSync(file, 0o640);
+    atomicWriteText(file, 'v2\n');
+    // 0600 must hold at write time regardless of what open() was given.
+    fs.chmodSync(file, 0o600);
+    atomicWriteText(file, 'v3\n');
+  } finally {
+    process.umask(oldUmask);
+    fs.writeFileSync = realWriteFileSync;
+  }
+
+  assert.deepEqual(seen, [0o640, 0o600], 'mode on the fd when content was written');
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'v3\n');
+  assert.equal(fs.existsSync(`${file}.tmp`), false);
 });
 
 test('atomicWriteText replaces via sibling temp + rename and cleans up on failure', async () => {
