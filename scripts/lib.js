@@ -322,9 +322,6 @@ export function loadState() {
   return normalizeState(readJson(STATE_PATH, DEFAULT_STATE));
 }
 
-// Node's default maxBuffer is 1 MiB; a capped page of 300 rows can exceed that
-// on its own (300 × 4 KB of content plus JSON framing). 64 MiB leaves room for
-// long messages without letting a runaway response exhaust memory.
 export function policyIsUnconfigured(policyPath = POLICY_PATH) {
   if (!fs.existsSync(policyPath)) return true;
   return fs.readFileSync(policyPath, 'utf8').includes(UNCONFIGURED_MARKER);

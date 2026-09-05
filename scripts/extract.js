@@ -111,10 +111,12 @@ function recentPage(c4DbCli, limit, maxBytes) {
 // capping. The first page is one row beyond the cap, so the common case
 // (a window smaller than the cap) still costs a single call.
 //
-// The read is bounded by max_page_bytes: when the next page would exceed it,
-// the previous page (the newest rows, all inside the window) is used and
-// `complete: false` says the oldest part of the window was not read. The
-// cost of larger pages is then never paid, whatever the messages contain.
+// What this process parses is bounded by max_page_bytes: a page over it is
+// discarded unread and the previous page (the newest rows; the caller still
+// applies the window, so rows newer than `end` are dropped) is used with
+// `complete: false`, meaning the oldest part of the window was not read. The
+// over-sized page has still been produced by the CLI and written to temp disk
+// before it is measured; only its parsing is skipped.
 function windowRows(c4DbCli, beginMs, firstPage, maxBytes) {
   let limit = firstPage;
   let previous = null;
@@ -228,7 +230,7 @@ function commandFetch(args) {
     if (!read.complete) {
       outputJson({
         status: 'skip', reason: 'incomplete_read', ...envelope,
-        owner_action: `only the newest ${read.rows.length} rows of the window fit under max_page_bytes (${maxPageBytes}) and they hold ${rows.length} in-scope messages, below min_conversations (${minConversations}); raise max_page_bytes, shorten the lookback, or lower max_conversations`
+        owner_action: `the read stopped at max_page_bytes (${maxPageBytes}) after the newest ${read.rows.length} rows; those inside the window hold ${rows.length} in-scope messages, below min_conversations (${minConversations}), and the older part of the window is unread; raise max_page_bytes, shorten the lookback, or lower max_conversations`
       });
     }
     outputJson({ status: 'skip', reason: 'below_threshold', ...envelope });

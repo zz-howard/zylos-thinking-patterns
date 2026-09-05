@@ -355,7 +355,7 @@ test('too few messages after an incomplete read is reported as incomplete_read, 
   assert.equal(result.status, 'skip');
   assert.equal(result.reason, 'incomplete_read');
   assert.equal(result.window_complete, false);
-  assert.match(result.owner_action, /newest 8 rows .* max_page_bytes \(2000\) .* 3 in-scope messages, below min_conversations \(10\)/);
+  assert.match(result.owner_action, /max_page_bytes \(2000\) after the newest 8 rows; .* 3 in-scope messages, below min_conversations \(10\), and the older part of the window is unread/);
   assert.equal(result.conversations, undefined);
 });
 
