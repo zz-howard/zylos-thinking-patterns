@@ -28,9 +28,7 @@ Version bump commit message: `chore: bump version to X.Y.Z`
 
 After merge, create a GitHub Release with tag `vX.Y.Z` from the merge commit.
 
-Machine gate vs process gate: `test/release-consistency.test.js` (added in the
-first release PR, together with the `0.1.0` bump — it only goes green once the
-CHANGELOG has a released heading) enforces the
+Machine gate vs process gate: `test/release-consistency.test.js` enforces the
 **final-tree** half of this rule only — the suite fails whenever the four
 version faces disagree in the working tree. The dedicated-release-PR and
 same-commit requirements are process gates, guaranteed by the release flow
@@ -40,7 +38,7 @@ negative controls intact — a gate that cannot fail proves nothing.
 ## Testing
 
 - `npm test` runs `node --test` over `test/*.test.js`; `npm run check` syntax-checks scripts and hooks
-- The release-consistency gate (above) lands with the first release PR and must stay
+- The release-consistency gate (above) ships with the component and must stay
 - When a test guards specific logic, prove it can fail: temporarily break the
   guarded behavior (a known-bad mutant), confirm the test goes red, restore
   the behavior, and keep the test

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-09-05
 
 ### Added
 - `references/methodology.md`: the fixed extraction procedure (CDM-adapted), two-axis `[Domain | Type]` taxonomy, entry and Reinforced-block format, quality bar, and run-summary rules (#1).
@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lifecycle hooks: post-install (data dir, defaults, policy template, owner-action message), pre-upgrade (backup config/policy/state; not invoked by the current zylos-core upgrade pipeline, documented as such), post-upgrade (merge new config defaults, normalize state) (#1).
 - `node:test` suite covering fetch/commit/inspect/status/template and the lifecycle hooks with fake comm-bridge and scheduler CLIs; CLI output is written synchronously so a large transcript is not truncated on a pipe (#1).
 - `docs/DESIGN.md` (architecture, data flow, design decisions) and `references/fetch-output.md` (field-by-field reference for the `fetch` JSON); `references/methodology.md` gains a table of contents (#2).
+- `test/release-consistency.test.js` (from the zylos component template): the four version faces — `package.json`, `package-lock.json`, `SKILL.md` frontmatter, latest released CHANGELOG heading — must agree, with negative controls for each stale face (#3).
 
 ### Changed
 - Post-install and post-upgrade hooks write `config.json` / `state.json` only when the merged content differs from the file on disk (compared with sorted keys), so re-running a hook on an up-to-date data directory touches nothing; owner values still win over defaults (#2).
