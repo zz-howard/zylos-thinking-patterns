@@ -1,6 +1,6 @@
 ---
 name: thinking-patterns
-version: 0.0.0
+version: 0.1.0
 description: Extract reusable decision heuristics (thinking patterns) from a Zylos agent's C4 conversations on a schedule the owner sets. Use when a scheduled `thinking-patterns` task arrives, when the owner asks to run thinking-pattern extraction, or when the owner asks to configure whose or what decision patterns this agent should extract (the extraction policy) and when it runs.
 type: utility
 
