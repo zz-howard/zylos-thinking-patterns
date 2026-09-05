@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `patterns.lint` in `inspect` / `fetch`: read-only drift report against the methodology — entries whose Type is outside the six fixed values, compound Domains, `Related patterns` lines with no entry number (with the entry located by title when the line names one), and `#N` references that resolve to no entry. Only `Issue #N` / `PR #N` / `MR #N` are read as tickets and skipped; wrapped list items are read as one item; only `/` marks a compound Domain. `summary` carries the counts. Nothing is changed in the file (#4).
+- `patterns.lint` in `inspect` / `fetch`: read-only drift report against the methodology — entries whose Type is outside the six fixed values, compound Domains, `Related patterns` lines with no entry number (with the entry located by title when the line names one), and `#N` references that resolve to no entry. Only `Issue #N` / `PR #N` / `MR #N` are read as tickets and skipped; wrapped list items are read as one item; a compound Domain is any of `A/B`, `A, B`, `A & B`, reported with its separator so an owner-defined `&` name (`Data & Metrics`) can be told apart. `summary` carries the counts. Nothing is changed in the file (#4).
 - `SKILL.md`: hard requirements for writes — Type ∈ the six, single Domain, every Related line names `#N` from this entry toward the target — and the run summary ends with the lint counts (#4).
 - `references/methodology.md`: relation-direction convention (written from the entry toward the target; conflicts may be recorded on both sides) and Reinforced blocks may record counter-cases; the run summary carries the lint counts (#4).
 

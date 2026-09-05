@@ -1137,7 +1137,7 @@ test('lint reports Type outside the six, compound Domain, Related lines without 
   const lint = JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.lint;
 
   assert.deepEqual(lint.type_off_vocabulary, [{ number: 2, type: 'Heuristic' }]);
-  assert.deepEqual(lint.compound_domain, [{ number: 2, domain: 'Process/Strategy' }]);
+  assert.deepEqual(lint.compound_domain, [{ number: 2, domain: 'Process/Strategy', separator: '/' }]);
   assert.deepEqual(lint.related_dangling, [{ number: 1, ref: 9 }, { number: 1, ref: 640 }], 'unresolved #N are dangling whatever their size; not the #9 after the Reinforced bullet');
   assert.deepEqual(lint.related_without_number.map(x => [x.number, x.located]), [[1, null], [1, 2], [1, null]]);
   assert.match(lint.related_without_number[2].text, /Issue #1 and PR #2/, 'ticket refs with their word do not make a line "numbered"');
@@ -1212,8 +1212,13 @@ test('lint: review boundaries — small file dangling, ambiguous titles, exact s
     '## 4. 机制优先', '`[Domain: Data & Metrics | Type: Constraint]`', ''
   ].join('\n'));
   assert.deepEqual(amb.related_without_number.map(x => x.located), [3, null, 4, null]);
-  assert.deepEqual(amb.compound_domain, [], '"Data & Metrics" is a legal Domain (methodology example)');
+  // Issue #4 scope: "A/B", "A, B" and "A & B" are all reported, each with its separator,
+  // so the owner can tell a legal "&" name ("Data & Metrics") from a combined value.
+  assert.deepEqual(amb.compound_domain, [{ number: 4, domain: 'Data & Metrics', separator: '&' }]);
   assert.equal(amb.summary.related_located, 2);
+  const shapes = lint('## 1. A\n`[Domain: Process, People | Type: Temporal]`\n\n## 2. B\n`[Domain: Process & People | Type: Temporal]`\n\n## 3. C\n`[Domain: Process/People | Type: Temporal]`\n\n## 4. D\n`[Domain: Data-Metrics | Type: Temporal]`\n');
+  assert.deepEqual(shapes.compound_domain.map(x => [x.number, x.separator]), [[1, ','], [2, '&'], [3, '/']], 'each shape from the issue is reported once, with its separator');
+  assert.equal(shapes.summary.compound_domain, 3, 'a hyphenated single name is not reported (negative control)');
 
   // A wrapped bullet continues its item; the bullets after it are still read.
   const wrapped = lint('## 1. One\n`[Domain: Process | Type: Temporal]`\n\n**Related patterns**:\n- #2 (Two) — a long line that\n  wraps onto a second line\n- #3 (Three) — still part of the list\n- Four — no number\n\n**Reinforced (2026-09-01)**: ends it\n- not a relation\n\n## 2. Two\n`[Domain: Process | Type: Temporal]`\n\n## 3. Three\n`[Domain: Process | Type: Temporal]`\n');

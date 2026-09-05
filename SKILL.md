@@ -100,7 +100,7 @@ Outer layer, in the main session:
 5. Analyze `conversations` following the methodology: detect decision moments → extract cues and rationale → induce candidates → check each against the existing file (reinforce, flag contradiction, or new entry) → apply the quality bar. Extracting nothing is a normal outcome. Overlap with an earlier run is expected when the lookback exceeds the interval: an event already recorded or reinforced in the file is not recorded again.
    Hard requirements for anything you write (the methodology's format, machine-checked by `patterns.lint` on the next run):
    - `Type` is one of the six methodology values: Simplification, Abstraction, Constraint, Prioritization, Delegation, Temporal. No other Type, ever — pick the closest of the six.
-   - `Domain` is a single value from the policy's set (or one new value, named in the run summary); never `A/B`.
+   - `Domain` is a single value from the policy's set (or one new value, named in the run summary); never combined as `A/B`, `A, B` or `A & B`. The lint reports every Domain holding `/`, `,` or `&` with the separator found; a set may legitimately contain an `&` name (the methodology's `Data & Metrics`), which the owner recognises from the report.
    - Every `Related patterns` line names the target entry by number, `#N (title) — how it relates`, written from this entry toward the target.
 6. Write according to the policy's **Confirmation** mode:
    - *record and notify*: append new entries and Reinforced blocks to the pattern file, then send the run summary to the policy's **Notification** endpoint.

@@ -455,8 +455,13 @@ export function lintPatternEntries(entries) {
   let relatedLines = 0;
   for (const e of entries) {
     if (e.type !== null && !PATTERN_TYPES.includes(e.type)) typeOff.push({ number: e.number, type: e.type });
-    // Only "/" marks a compound Domain: "Data & Metrics" is one Domain (methodology example).
-    if (e.domain !== null && e.domain.includes('/')) compound.push({ number: e.number, domain: e.domain });
+    // Issue #4 names three compound shapes: "A/B", "A, B", "A & B". All three are
+    // reported, with the separator found, so the owner can tell them apart: the
+    // Domain set is owner-defined and open, and an "&" may be one legal name
+    // ("Data & Metrics" in the methodology), which the report flags for a check
+    // rather than declares wrong.
+    const sep = e.domain === null ? null : e.domain.match(/[/,&]/);
+    if (sep) compound.push({ number: e.number, domain: e.domain, separator: sep[0] });
     for (const text of e.related) {
       relatedLines += 1;
       // "Issue #687" / "PR #12" name tickets and are not references. Every other
