@@ -367,6 +367,11 @@ export function policyIsUnconfigured(policyPath = POLICY_PATH) {
 // title and tag first and read only the entries that match.
 const ENTRY_HEADING = /^## (\d+)\.\s+(.*?)\s*$/;
 const REINFORCED = /^\*\*Reinforced \(/;
+const RELATED_HEADING = /^\*\*Related patterns\*\*/;
+const RELATED_ITEM = /^\s*[-*]\s+(.*\S)\s*$/;
+const ISSUE_REF = /\b(?:issue|pr|mr)s?\s*#\d+/gi;
+// The six Types the methodology fixes (references/methodology.md, "Classification").
+export const PATTERN_TYPES = ['Simplification', 'Abstraction', 'Constraint', 'Prioritization', 'Delegation', 'Temporal'];
 const TAG = /^`\[Domain: ([^|\]]+?)\s*\|\s*Type: ([^\]]+?)\s*\]`/;
 
 function tally(values) {
@@ -375,29 +380,95 @@ function tally(values) {
   return Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
 }
 
+// Each entry also carries `related`: the text of every list item under its
+// `**Related patterns**` heading (the list ends at the next non-blank line that
+// is not an item). The index printed to the agent omits it; lint reads it.
 export function parsePatternEntries(text) {
   const entries = [];
   let current = null;
+  let inRelated = false;
   for (const line of text.split('\n')) {
     const heading = line.match(ENTRY_HEADING);
     if (heading) {
-      current = { number: Number(heading[1]), title: heading[2], domain: null, type: null, reinforced: 0 };
+      current = { number: Number(heading[1]), title: heading[2], domain: null, type: null, reinforced: 0, related: [] };
       entries.push(current);
+      inRelated = false;
       continue;
     }
     if (!current) continue;
+    if (inRelated) {
+      const item = line.match(RELATED_ITEM);
+      // A "- **Reinforced (...)**" bullet is a Reinforced block, not a relation: it ends the list.
+      if (item && !REINFORCED.test(item[1])) { current.related.push(item[1]); continue; }
+      if (line.trim() === '') continue;
+      inRelated = false;
+    }
     const tag = line.match(TAG);
     if (tag && current.domain === null) {
       current.domain = tag[1].trim();
       current.type = tag[2].trim();
     } else if (REINFORCED.test(line)) {
       current.reinforced += 1;
+    } else if (RELATED_HEADING.test(line)) {
+      inRelated = true;
     }
   }
   return entries;
 }
 
-const EMPTY_PATTERNS = { exists: false, entry_count: 0, max_number: 0, next_number: 1, reinforced_count: 0, domains: {}, types: {}, entries: [] };
+// Title key for locating a number-less "Related patterns" line: the title up
+// to its first dash/em-dash separator, lower-cased. Short keys are not matched.
+function titleKey(title) {
+  return String(title).split(/\s[—–-]\s|—/)[0].trim().toLowerCase();
+}
+
+// Read-only drift report against the methodology: Type outside the fixed six,
+// compound Domain, Related lines with no #N (and whether the name they use can
+// be located among entry titles), #N that resolve to no entry. Reports only —
+// nothing here changes the file.
+export function lintPatternEntries(entries) {
+  const numbers = new Set(entries.map(e => e.number));
+  const maxNumber = entries.reduce((max, e) => Math.max(max, e.number), 0);
+  const keys = entries.map(e => ({ number: e.number, key: titleKey(e.title) })).filter(k => k.key.length >= 8);
+  const typeOff = [];
+  const compound = [];
+  const withoutNumber = [];
+  const dangling = [];
+  let relatedLines = 0;
+  for (const e of entries) {
+    if (e.type !== null && !PATTERN_TYPES.includes(e.type)) typeOff.push({ number: e.number, type: e.type });
+    if (e.domain !== null && /[/,&]/.test(e.domain)) compound.push({ number: e.number, domain: e.domain });
+    for (const text of e.related) {
+      relatedLines += 1;
+      // "Issue #687" / "PR #12" name tickets, and so does any #N above the
+      // highest entry number; only a bare #N inside the entry range is a reference.
+      const refs = [...text.replace(ISSUE_REF, '').matchAll(/#(\d+)/g)].map(m => Number(m[1])).filter(n => n <= maxNumber);
+      if (refs.length === 0) {
+        const lower = text.toLowerCase();
+        const hit = keys.find(k => k.number !== e.number && lower.includes(k.key));
+        withoutNumber.push({ number: e.number, text: text.length > 120 ? `${text.slice(0, 117)}...` : text, located: hit ? hit.number : null });
+      } else {
+        for (const ref of refs) if (!numbers.has(ref)) dangling.push({ number: e.number, ref });
+      }
+    }
+  }
+  return {
+    type_off_vocabulary: typeOff,
+    compound_domain: compound,
+    related_without_number: withoutNumber,
+    related_dangling: dangling,
+    summary: {
+      type_off_vocabulary: typeOff.length,
+      compound_domain: compound.length,
+      related_lines: relatedLines,
+      related_without_number: withoutNumber.length,
+      related_located: withoutNumber.filter(x => x.located !== null).length,
+      related_dangling: dangling.length
+    }
+  };
+}
+
+const EMPTY_PATTERNS = { exists: false, entry_count: 0, max_number: 0, next_number: 1, reinforced_count: 0, domains: {}, types: {}, entries: [], lint: lintPatternEntries([]) };
 
 export function inspectPatternsFile(patternsFile) {
   if (!patternsFile) return { patterns_file: null, ...EMPTY_PATTERNS };
@@ -415,7 +486,8 @@ export function inspectPatternsFile(patternsFile) {
     reinforced_count: entries.reduce((sum, e) => sum + e.reinforced, 0),
     domains: tally(tagged.map(e => e.domain)),
     types: tally(tagged.map(e => e.type)),
-    entries
+    entries: entries.map(({ related, ...index }) => index),
+    lint: lintPatternEntries(entries)
   };
 }
 

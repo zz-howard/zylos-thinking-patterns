@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `patterns.lint` in `inspect` / `fetch`: read-only drift report against the methodology — entries whose Type is outside the six fixed values, compound Domains, `Related patterns` lines with no entry number (with the entry located by title when the line names one), and `#N` references inside the entry range that resolve to no entry. Ticket references (`Issue #N`, `PR #N`, or any `#N` above the highest entry number) are not counted. `summary` carries the counts. Nothing is changed in the file (#4).
+- `SKILL.md`: hard requirements for writes — Type ∈ the six, single Domain, every Related line names `#N` from this entry toward the target — and the run summary ends with the lint counts (#4).
+- `references/methodology.md`: relation-direction convention (written from the entry toward the target; conflicts may be recorded on both sides) and Reinforced blocks may record counter-cases; the run summary carries the lint counts (#4).
+
 ## [0.1.0] - 2026-09-05
 
 ### Added

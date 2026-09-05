@@ -131,7 +131,18 @@ sharper boundary, a corollary, a counter-case>
 ```
 
 If the reinforcement yields a genuinely new corollary, add an
-`**Extracted corollary**:` paragraph after it.
+`**Extracted corollary**:` paragraph after it. A Reinforced block may also
+record a counter-case — an event where the principle did not apply or was
+overridden — stated as such; a counter-case sharpens the boundary and is not a
+contradiction unless the principle itself no longer holds.
+
+**Relation direction.** A `Related patterns` line is written from the entry it
+sits under toward the target: `#M (title) — how #M relates to this entry`. The
+target entry need not carry the reverse line; a reader following relations
+starts from the entry at hand. Conflict relations ("#M pulls the other way
+when …") may be recorded on both entries, since a conflict reads the same from
+either side. Every relation line names its target by number; a line with only a
+title is unresolvable once titles change.
 
 Entries are separated by a line containing only `---`.
 
@@ -149,4 +160,7 @@ When a run records or reinforces anything, the summary to the owner (if the
 policy asks for one) is short: one line per new entry (number + title) and one
 line per reinforcement (number + what it added). If a contradiction with an
 existing entry was found, say so explicitly. No summary is sent when nothing
-was recorded, unless the policy says otherwise.
+was recorded, unless the policy says otherwise. Any summary that is sent ends
+with the file's lint counts (Type outside the six, compound Domain, Related
+lines without a number, dangling references) as reported by the component,
+so format drift is visible to the owner without opening the file.

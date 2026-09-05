@@ -91,6 +91,7 @@ than a full re-read:
 | `reinforced_count` | Number of `**Reinforced (...)**` blocks in the file |
 | `domains`, `types` | Distribution of the `[Domain: X | Type: Y]` tags over existing entries |
 | `entries` | Index of every existing entry: `number`, `title`, `domain`, `type`, `reinforced` count. Screen candidates against titles and tags first; read in full only the entries that could match |
+| `lint` | Read-only drift report against the methodology (nothing is changed): `type_off_vocabulary` (`{number, type}` for every entry whose Type is not one of the six), `compound_domain` (`{number, domain}` where the Domain holds `/`, `,` or `&`), `related_without_number` (`{number, text, located}` for every `Related patterns` line with no `#N` in the entry range — `located` is the entry number whose title the line names, or `null`), `related_dangling` (`{number, ref}` for a `#N` in the entry range that resolves to no entry). A `#N` above the highest entry number, or written as `Issue #N` / `PR #N`, is a ticket reference and is ignored. `summary` carries the counts (`type_off_vocabulary`, `compound_domain`, `related_lines`, `related_without_number`, `related_located`, `related_dangling`); quote it in the run summary |
 
 ## Skip statuses
 

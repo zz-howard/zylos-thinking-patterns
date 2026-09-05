@@ -98,10 +98,15 @@ Outer layer, in the main session:
    - the methodology: `methodology_file` from the fetch JSON;
    - the current pattern file: `patterns.patterns_file` from the fetch JSON (may not exist yet). `patterns.next_number` is the number for the next new entry. Use `patterns.entries` as the index: screen each candidate against titles and `[Domain | Type]` tags first, then read in full only the entries that could match, instead of re-reading the whole file every run.
 5. Analyze `conversations` following the methodology: detect decision moments → extract cues and rationale → induce candidates → check each against the existing file (reinforce, flag contradiction, or new entry) → apply the quality bar. Extracting nothing is a normal outcome. Overlap with an earlier run is expected when the lookback exceeds the interval: an event already recorded or reinforced in the file is not recorded again.
+   Hard requirements for anything you write (the methodology's format, machine-checked by `patterns.lint` on the next run):
+   - `Type` is one of the six methodology values: Simplification, Abstraction, Constraint, Prioritization, Delegation, Temporal. No other Type, ever — pick the closest of the six.
+   - `Domain` is a single value from the policy's set (or one new value, named in the run summary); never `A/B`.
+   - Every `Related patterns` line names the target entry by number, `#N (title) — how it relates`, written from this entry toward the target.
 6. Write according to the policy's **Confirmation** mode:
    - *record and notify*: append new entries and Reinforced blocks to the pattern file, then send the run summary to the policy's **Notification** endpoint.
    - *ask me first*: do not touch the pattern file. Send the candidates (title, tag, one-line principle, source event) to the notification endpoint and stop; the owner's approval arrives as a normal message, and whoever handles it appends the approved entries by hand.
    - *record silently*: append; send nothing.
+   Whenever a run summary is sent, end it with one line from `patterns.lint.summary`, e.g. `lint: 31 Type outside the six, 6 compound Domain, 131/612 Related lines without #N, 0 dangling` — so drift in the file stays visible to the owner. The lint reports; it never edits the file, and neither does this workflow beyond appending.
 7. Commit state (same `--task`, `--policy`, `--lookback`, `--window-end` as above):
    - pattern file changed: `commit --result updated ...`
    - nothing written (including the *ask me first* case): `commit --result no_change ...`
