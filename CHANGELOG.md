@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-05
 
 ### Added
 - `patterns.lint` in `inspect` / `fetch`: read-only drift report against the methodology — entries whose Type is outside the six fixed values, possible compound Domains, `Related patterns` lines with no entry number (with the entry located by title when the line names one), and `#N` references that resolve to no entry. Only `Issue #N` / `PR #N` / `MR #N` are read as tickets and skipped; wrapped list items are read as one item; `compound_domain` lists possible compound Domains — any Domain holding `/`, `,` or `&` — with the separator found, as a hint for the owner to check against their set (an owner-defined `&` name such as `Data & Metrics` is legal), not a confirmed violation. `summary` carries the counts. Nothing is changed in the file (#4).
