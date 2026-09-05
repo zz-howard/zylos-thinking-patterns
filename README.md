@@ -73,7 +73,7 @@ A second subject (another person, role or domain) is a second policy file, `poli
 - `max_conversations` — the most messages a single run will read; when a window holds more, the oldest part is left out and the fetch result says `truncated: true`.
 - `default_lookback` — used when a task does not pass `--lookback`. Each scheduled task normally carries its own.
 
-The target pattern file is not in config: it is the policy's `Patterns file` line. An older `patterns_file` in config is moved there by the post-upgrade hook once a `policy.md` exists; until then it stays in config untouched.
+The target pattern file is not in config: it is the policy's `Patterns file` line; config carries no copy of it.
 
 ## Runtime Model
 

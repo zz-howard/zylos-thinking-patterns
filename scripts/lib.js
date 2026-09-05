@@ -158,28 +158,6 @@ export function policySection(text, heading) {
   return (end === -1 ? rest : rest.slice(0, end)).join('\n');
 }
 
-// Write `target` into the policy's ## Target section: replace an existing
-// "Patterns file:" line (placeholder or blank) in place, insert one after the
-// heading when the section has none, or append a new section when there is no
-// ## Target at all. Owner prose is never touched. Returns the new text.
-export function setPolicyTarget(text, target) {
-  const line = `Patterns file: ${target}`;
-  const lines = text.split('\n');
-  const start = lines.findIndex(l => /^##\s+Target\s*$/i.test(l));
-  if (start === -1) {
-    return `${text}${text.endsWith('\n') || text === '' ? '' : '\n'}\n## Target\n\n${line}\n`;
-  }
-  let end = lines.slice(start + 1).findIndex(l => /^##\s/.test(l));
-  end = end === -1 ? lines.length : start + 1 + end;
-  const existing = lines.slice(start + 1, end).findIndex(l => /^Patterns file:/i.test(l));
-  if (existing !== -1) {
-    lines[start + 1 + existing] = line;
-  } else {
-    lines.splice(start + 1, 0, '', line);
-  }
-  return lines.join('\n');
-}
-
 // A "Label: value" line at line start inside `text`; placeholders count as absent.
 function policyLine(text, label) {
   const match = text.match(new RegExp(`^${label}:[ \\t]*(.*)$`, 'mi'));
@@ -325,39 +303,6 @@ export function atomicWriteJson(filePath, value) {
   fs.renameSync(tmpPath, filePath);
 }
 
-// Atomic replacement of an owner-authored text file: write a sibling temp file
-// (deterministic name, single writer) and rename it over the original, so an
-// interrupted write leaves the original bytes untouched. The temp file is
-// created fresh (a stale one is removed, never reused) with the original's
-// permission bits applied before any content is written, so an owner's 0600
-// survives the swap and the full text is never briefly world-readable. Throws
-// on failure and removes the temp file when it can.
-export function atomicWriteText(filePath, text) {
-  ensureDir(path.dirname(filePath));
-  const tmpPath = `${filePath}.tmp`;
-  let mode = null;
-  try {
-    mode = fs.statSync(filePath).mode & 0o777;
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-  }
-  try {
-    fs.rmSync(tmpPath, { force: true });
-    const fd = fs.openSync(tmpPath, 'wx', mode ?? 0o644);
-    try {
-      if (mode !== null) fs.fchmodSync(fd, mode); // exact bits, independent of umask
-      fs.writeFileSync(fd, text);
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(tmpPath, filePath);
-  } catch (err) {
-    try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
-    throw err;
-  }
-}
-
 export function writeIfMissing(filePath, content) {
   if (fs.existsSync(filePath)) return false;
   ensureDir(path.dirname(filePath));
@@ -370,8 +315,7 @@ export function loadConfig() {
 }
 
 export function normalizeState(state) {
-  const { last_processed_id, last_observed_id, ...rest } = state; // schema 1 leftovers are dropped
-  return { ...DEFAULT_STATE, ...rest, schema_version: 2 };
+  return { ...DEFAULT_STATE, ...state, schema_version: DEFAULT_STATE.schema_version };
 }
 
 export function loadState() {

@@ -201,7 +201,7 @@ Example URL behavior:
 | `configure.js` | After zylos collects `config.required` | Non-interactively write collected values to config.json |
 | `post-install.js` | After `zylos add` | Create data dirs, default config |
 | `pre-upgrade.js` | Manual only — the current `zylos upgrade` pipeline does not invoke it (core takes its own backup); run `node hooks/pre-upgrade.js` by hand | Backup config/policy/state to `backups/<timestamp>/` |
-| `post-upgrade.js` | After `zylos upgrade` | Migrate config schema |
+| `post-upgrade.js` | After `zylos upgrade` | Merge new config defaults, normalize state |
 
 ## Acceptance Checklist
 
@@ -212,7 +212,7 @@ Example URL behavior:
 - [ ] `npm install && npm start` works
 - [ ] configure.js accepts stdin JSON and writes required values to config.json
 - [ ] post-install.js creates data directory and default config
-- [ ] post-upgrade.js handles config migrations
+- [ ] post-upgrade.js merges new config defaults
 - [ ] PM2 can manage the service (`pm2 start ecosystem.config.cjs`)
 - [ ] (communication) scripts/send.js sends text and media
 - [ ] (communication) Messages forwarded to C4 in correct format
