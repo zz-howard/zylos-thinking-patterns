@@ -442,7 +442,7 @@ function titleLocator(entries) {
 }
 
 // Read-only drift report against the methodology: Type outside the fixed six,
-// compound Domain, Related lines with no #N (and whether the name they use can
+// possible compound Domain (owner check), Related lines with no #N (and whether the name they use can
 // be located among entry titles), #N that resolve to no entry. Reports only —
 // nothing here changes the file.
 export function lintPatternEntries(entries) {

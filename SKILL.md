@@ -106,7 +106,7 @@ Outer layer, in the main session:
    - *record and notify*: append new entries and Reinforced blocks to the pattern file, then send the run summary to the policy's **Notification** endpoint.
    - *ask me first*: do not touch the pattern file. Send the candidates (title, tag, one-line principle, source event) to the notification endpoint and stop; the owner's approval arrives as a normal message, and whoever handles it appends the approved entries by hand.
    - *record silently*: append; send nothing.
-   Whenever a run summary is sent, end it with one line from `patterns.lint.summary`, e.g. `lint: 31 Type outside the six, 6 compound Domain, 131/612 Related lines without #N, 0 dangling` — so drift in the file stays visible to the owner. The lint reports; it never edits the file, and neither does this workflow beyond appending.
+   Whenever a run summary is sent, end it with one line from `patterns.lint.summary`, e.g. `lint: 31 Type outside the six, 6 possible compound Domain (owner check), 131/612 Related lines without #N, 0 dangling` — so drift in the file stays visible to the owner. The lint reports; it never edits the file, and neither does this workflow beyond appending.
 7. Commit state (same `--task`, `--policy`, `--lookback`, `--window-end` as above):
    - pattern file changed: `commit --result updated ...`
    - nothing written (including the *ask me first* case): `commit --result no_change ...`

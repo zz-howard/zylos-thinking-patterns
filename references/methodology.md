@@ -161,6 +161,6 @@ policy asks for one) is short: one line per new entry (number + title) and one
 line per reinforcement (number + what it added). If a contradiction with an
 existing entry was found, say so explicitly. No summary is sent when nothing
 was recorded, unless the policy says otherwise. Any summary that is sent ends
-with the file's lint counts (Type outside the six, compound Domain, Related
+with the file's lint counts (Type outside the six, possible compound Domain, Related
 lines without a number, dangling references) as reported by the component,
 so format drift is visible to the owner without opening the file.
