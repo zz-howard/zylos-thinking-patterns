@@ -158,6 +158,28 @@ export function policySection(text, heading) {
   return (end === -1 ? rest : rest.slice(0, end)).join('\n');
 }
 
+// Write `target` into the policy's ## Target section: replace an existing
+// "Patterns file:" line (placeholder or blank) in place, insert one after the
+// heading when the section has none, or append a new section when there is no
+// ## Target at all. Owner prose is never touched. Returns the new text.
+export function setPolicyTarget(text, target) {
+  const line = `Patterns file: ${target}`;
+  const lines = text.split('\n');
+  const start = lines.findIndex(l => /^##\s+Target\s*$/i.test(l));
+  if (start === -1) {
+    return `${text}${text.endsWith('\n') || text === '' ? '' : '\n'}\n## Target\n\n${line}\n`;
+  }
+  let end = lines.slice(start + 1).findIndex(l => /^##\s/.test(l));
+  end = end === -1 ? lines.length : start + 1 + end;
+  const existing = lines.slice(start + 1, end).findIndex(l => /^Patterns file:/i.test(l));
+  if (existing !== -1) {
+    lines[start + 1 + existing] = line;
+  } else {
+    lines.splice(start + 1, 0, '', line);
+  }
+  return lines.join('\n');
+}
+
 // A "Label: value" line at line start inside `text`; placeholders count as absent.
 function policyLine(text, label) {
   const match = text.match(new RegExp(`^${label}:[ \\t]*(.*)$`, 'mi'));

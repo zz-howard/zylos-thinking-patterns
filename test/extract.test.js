@@ -847,6 +847,74 @@ test('post-upgrade ignores a "Patterns file:" line outside ## Target and migrate
   assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).patterns_file, undefined);
 });
 
+test('post-upgrade fills the current template\'s Target placeholder in place when config still holds patterns_file', () => {
+  // Recovery path: legacy config, then the owner creates policy.md from the
+  // current template (which already has a ## Target placeholder), then upgrades.
+  const { dir, dataDir, env } = setup(makeRows([10]));
+  const target = path.join(dir, 'legacy-patterns.md');
+  writeConfig(dataDir, { patterns_file: target });
+  const template = runNode(EXTRACT, ['template', '--policy'], env);
+  fs.writeFileSync(path.join(dataDir, 'policy.md'), template.split('\n').slice(1).join('\n')); // marker removed
+
+  const output = runNode(POST_UPGRADE, [], env);
+  const policy = fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8');
+
+  assert.match(output, /Moved patterns_file/);
+  assert.equal((policy.match(/^## Target$/gm) || []).length, 1, 'no second ## Target section');
+  assert.match(policy, new RegExp(`^Patterns file: ${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
+  assert.doesNotMatch(policy, /Patterns file: \(fill in/);
+  assert.match(policy, /Which file the patterns are written to/, 'template prose in the section is preserved');
+  assert.equal(JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.patterns_file, target);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).patterns_file, undefined);
+  assert.equal(runNode(POST_UPGRADE, [], env).includes('Moved'), false, 'second run is a no-op');
+  assert.equal(fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8'), policy);
+});
+
+test('post-upgrade migrates into an untouched template (marker still present) without duplicating sections', () => {
+  const { dir, dataDir, env } = setup(makeRows([10]));
+  const target = path.join(dir, 'legacy-patterns.md');
+  writeConfig(dataDir, { patterns_file: target });
+  fs.writeFileSync(path.join(dataDir, 'policy.md'), runNode(EXTRACT, ['template', '--policy'], env));
+
+  runNode(POST_UPGRADE, [], env);
+  const policy = fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8');
+  const status = JSON.parse(runNode(EXTRACT, ['status'], env));
+
+  assert.ok(policy.startsWith(UNCONFIGURED_MARKER), 'marker is the owner\'s to remove');
+  assert.equal((policy.match(/^## Target$/gm) || []).length, 1);
+  assert.equal(status.patterns.patterns_file, target);
+  assert.equal(status.policy_unconfigured, true);
+  assert.equal(status.config.patterns_file, undefined);
+});
+
+test('post-upgrade inserts the Patterns file line into a ## Target section that has none', () => {
+  const { dir, dataDir, env } = setup(makeRows([10]));
+  const target = path.join(dir, 'p.md');
+  writeConfig(dataDir, { patterns_file: target });
+  fs.writeFileSync(path.join(dataDir, 'policy.md'), '# Policy\n\n## Target\n\nowner note about the target\n\n## Sources\n\nChannels: all\n');
+
+  runNode(POST_UPGRADE, [], env);
+  const policy = fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8');
+
+  assert.match(policy, /## Target\n\nPatterns file: .*\n\nowner note about the target\n\n## Sources\n\nChannels: all\n/);
+  assert.equal(JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.patterns_file, target);
+});
+
+test('setPolicyTarget positive and negative controls', async () => {
+  const { setPolicyTarget, parsePolicy, POLICY_TEMPLATE } = await import('../scripts/lib.js');
+
+  const filled = setPolicyTarget(POLICY_TEMPLATE, '~/t.md');
+  assert.equal(parsePolicy(filled).patterns_file, '~/t.md');
+  assert.equal((filled.match(/^## Target$/gm) || []).length, 1);
+  assert.equal(filled.length, POLICY_TEMPLATE.length - 'Patterns file: (fill in, e.g. ~/zylos/memory/thinking-patterns.md)'.length + 'Patterns file: ~/t.md'.length, 'only the placeholder line changed');
+
+  assert.equal(setPolicyTarget('# P\nSubject: x\n', '~/t.md'), '# P\nSubject: x\n\n## Target\n\nPatterns file: ~/t.md\n');
+  assert.equal(setPolicyTarget('## Target\nPatterns file: ~/old.md\n## Sources\n', '~/new.md'), '## Target\nPatterns file: ~/new.md\n## Sources\n');
+  // A "Patterns file:" line outside ## Target is prose and is not rewritten.
+  const decoy = '## Extra guidance\nPatterns file: ~/decoy.md\n';
+  assert.equal(setPolicyTarget(decoy, '~/t.md'), `${decoy}\n## Target\n\nPatterns file: ~/t.md\n`);
+});
+
 test('fetch accepts a C4 response larger than the 1 MiB child-process default', () => {
   // 300 rows × 4 KB (the allowed max_conversations page) is ~1.3 MB of JSON.
   const rows = makeRows(Array.from({ length: 300 }, (_, i) => 300 - i));

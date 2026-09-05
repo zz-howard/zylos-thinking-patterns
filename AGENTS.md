@@ -200,7 +200,7 @@ Example URL behavior:
 |------|------|---------|
 | `configure.js` | After zylos collects `config.required` | Non-interactively write collected values to config.json |
 | `post-install.js` | After `zylos add` | Create data dirs, default config |
-| `pre-upgrade.js` | Before `zylos upgrade` | Backup config. Exit 1 to abort |
+| `pre-upgrade.js` | Manual only — the current `zylos upgrade` pipeline does not invoke it (core takes its own backup); run `node hooks/pre-upgrade.js` by hand | Backup config/policy/state to `backups/<timestamp>/` |
 | `post-upgrade.js` | After `zylos upgrade` | Migrate config schema |
 
 ## Acceptance Checklist

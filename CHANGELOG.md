@@ -28,4 +28,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Policy lines are read only inside their own sections (`Patterns file:` under `## Target`, channel lines under `## Sources`), so owner prose elsewhere cannot be mistaken for configuration.
 - The comm-bridge call uses a 64 MiB output buffer; a full 300-row page of long messages no longer fails with ENOBUFS.
 - `truncated` is exact: fetch reads one row beyond `max_conversations` as a sentinel and reports truncation only when that row lies inside the window.
-- README states that the pre-upgrade backup hook is not invoked by the current core upgrade pipeline.
+- README states that the pre-upgrade backup hook is not invoked by the current core upgrade pipeline; AGENTS.md / CLAUDE.md lifecycle tables say the same.
+- Post-upgrade fills the template's `## Target` placeholder line in place (no duplicate section) and drops `patterns_file` from config only after reading the policy back and resolving the same target (review finding: legacy config + current template left the target unresolvable).
