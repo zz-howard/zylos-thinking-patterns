@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const HOME = os.homedir();
 export const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(HOME, 'zylos');
@@ -10,11 +11,15 @@ export const POLICY_PATH = path.join(DATA_DIR, 'policy.md');
 export const STATE_PATH = path.join(DATA_DIR, 'state.json');
 export const LOG_DIR = path.join(DATA_DIR, 'logs');
 export const RUN_LOG_PATH = path.join(LOG_DIR, 'runs.jsonl');
-export const SKILL_DIR = path.resolve(import.meta.dirname, '..');
+export const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const METHODOLOGY_PATH = path.join(SKILL_DIR, 'references/methodology.md');
-export const SKILL_MD_INSTALLED = '~/zylos/.claude/skills/thinking-patterns/SKILL.md';
-export const EXTRACT_INSTALLED = '~/zylos/.claude/skills/thinking-patterns/scripts/extract.js';
-export const SCHEDULER_CLI_INSTALLED = '~/zylos/.claude/skills/scheduler/scripts/cli.js';
+// Paths as they are printed into templates and the default config. `~/zylos` is
+// the platform convention; a non-default ZYLOS_DIR is honoured here as well as
+// for the data directory above.
+const ZYLOS_DIR_DISPLAY = process.env.ZYLOS_DIR || '~/zylos';
+export const SKILL_MD_INSTALLED = `${ZYLOS_DIR_DISPLAY}/.claude/skills/thinking-patterns/SKILL.md`;
+export const EXTRACT_INSTALLED = `${ZYLOS_DIR_DISPLAY}/.claude/skills/thinking-patterns/scripts/extract.js`;
+export const SCHEDULER_CLI_INSTALLED = `${ZYLOS_DIR_DISPLAY}/.claude/skills/scheduler/scripts/cli.js`;
 export const TASK_NAME_PREFIX = 'thinking-patterns';
 export const DEFAULT_TASK = 'default';
 
@@ -27,7 +32,7 @@ export const DEFAULT_CONFIG = {
   max_conversations: 300,
   max_page_bytes: 64 * 1024 * 1024,
   default_lookback: '24h',
-  c4_db_cli: '~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js'
+  c4_db_cli: `${ZYLOS_DIR_DISPLAY}/.claude/skills/comm-bridge/scripts/c4-db.js`
 };
 
 // Channels that never carry the subject's judgment: scheduler/system notices
@@ -301,6 +306,26 @@ export function atomicWriteJson(filePath, value) {
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmpPath, payload);
   fs.renameSync(tmpPath, filePath);
+}
+
+// Deterministic serialization (sorted keys, recursively) so two JSON files that
+// hold the same values compare equal regardless of key order or formatting.
+export function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+// Write only when the content differs from what is on disk: hooks that merge
+// defaults stay idempotent instead of rewriting owner files on every run.
+// Returns true when the file was written.
+export function writeJsonIfChanged(filePath, value) {
+  const current = fs.existsSync(filePath) ? readJson(filePath, {}) : undefined;
+  if (current !== undefined && stableStringify(current) === stableStringify(value)) return false;
+  atomicWriteJson(filePath, value);
+  return true;
 }
 
 export function writeIfMissing(filePath, content) {

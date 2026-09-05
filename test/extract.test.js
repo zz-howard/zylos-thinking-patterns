@@ -4,8 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(import.meta.dirname, '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXTRACT = path.join(ROOT, 'scripts/extract.js');
 const POST_INSTALL = path.join(ROOT, 'hooks/post-install.js');
 const POST_UPGRADE = path.join(ROOT, 'hooks/post-upgrade.js');
@@ -981,4 +982,66 @@ test('parseDuration positive and negative controls', async () => {
   for (const bad of ['', '24', 'h', '1w', '0d', '-1h', 24]) {
     assert.throws(() => parseDuration(bad), /Invalid lookback/, `should reject ${JSON.stringify(bad)}`);
   }
+});
+
+test('hooks are idempotent: an up-to-date config and state are not rewritten, even with reordered keys', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  const env = { ZYLOS_DATA_DIR: dataDir, ZYLOS_DIR: dir };
+  runNode(POST_INSTALL, [], env);
+  const configPath = path.join(dataDir, 'config.json');
+  const statePath = path.join(dataDir, 'state.json');
+  // Owner edits a value and rewrites the file with a different key order and formatting.
+  const installed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const reordered = Object.fromEntries(Object.entries({ ...installed, min_conversations: 9 }).reverse());
+  fs.writeFileSync(configPath, JSON.stringify(reordered));
+  const configBytes = fs.readFileSync(configPath, 'utf8');
+  const stateBytes = fs.readFileSync(statePath, 'utf8');
+  const configMtime = fs.statSync(configPath).mtimeMs;
+  const stateMtime = fs.statSync(statePath).mtimeMs;
+
+  const upgrade = runNode(POST_UPGRADE, [], env);
+  const install = runNode(POST_INSTALL, [], env);
+
+  assert.match(upgrade, /config\.json: up to date/);
+  assert.match(upgrade, /state\.json: up to date/);
+  assert.match(install, /Config exists; up to date/);
+  assert.match(install, /State exists; up to date/);
+  assert.equal(fs.readFileSync(configPath, 'utf8'), configBytes, 'config.json bytes must be untouched');
+  assert.equal(fs.readFileSync(statePath, 'utf8'), stateBytes, 'state.json bytes must be untouched');
+  assert.equal(fs.statSync(configPath).mtimeMs, configMtime);
+  assert.equal(fs.statSync(statePath).mtimeMs, stateMtime);
+  assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).min_conversations, 9);
+});
+
+test('negative control: post-upgrade does write when a default key is missing (the idempotency guard can fail)', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  const env = { ZYLOS_DATA_DIR: dataDir, ZYLOS_DIR: dir };
+  runNode(POST_INSTALL, [], env);
+  const configPath = path.join(dataDir, 'config.json');
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  delete config.default_lookback;
+  config.min_conversations = 9;
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  const before = fs.readFileSync(configPath, 'utf8');
+
+  const upgrade = runNode(POST_UPGRADE, [], env);
+  const after = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+  assert.match(upgrade, /config\.json: added missing default fields/);
+  assert.notEqual(fs.readFileSync(configPath, 'utf8'), before);
+  assert.equal(after.default_lookback, '24h', 'missing default restored');
+  assert.equal(after.min_conversations, 9, 'owner value preserved');
+});
+
+test('printed install paths follow ZYLOS_DIR and default to ~/zylos', () => {
+  const custom = runNode(EXTRACT, ['template', '--lookback', '24h', '--task', 'daily', '--cron', '0 1 * * *'], { ZYLOS_DIR: '/opt/zy' });
+  assert.match(custom, /\/opt\/zy\/\.claude\/skills\/thinking-patterns\/SKILL\.md/);
+  assert.match(custom, /\/opt\/zy\/\.claude\/skills\/scheduler\/scripts\/cli\.js/);
+  assert.doesNotMatch(custom, /~\/zylos\//);
+
+  const standard = runNode(EXTRACT, ['template', '--lookback', '24h', '--task', 'daily', '--cron', '0 1 * * *'], { ZYLOS_DIR: '' });
+  assert.match(standard, /~\/zylos\/\.claude\/skills\/thinking-patterns\/SKILL\.md/);
+  assert.match(standard, /~\/zylos\/\.claude\/skills\/scheduler\/scripts\/cli\.js/);
 });

@@ -8,6 +8,15 @@
   Thinking-pattern extraction component for Zylos agents.
 </p>
 
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg" alt="Node.js"></a>
+  <a href="https://discord.gg/GS2J39EGff"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://x.com/ZylosAI"><img src="https://img.shields.io/badge/X-follow-000000?logo=x&logoColor=white" alt="X"></a>
+  <a href="https://zylos.ai"><img src="https://img.shields.io/badge/website-zylos.ai-blue" alt="Website"></a>
+  <a href="https://openmax.com"><img src="https://img.shields.io/badge/Built%20by-OpenMax-orange" alt="Built by OpenMax"></a>
+</p>
+
 ---
 
 `zylos-thinking-patterns` periodically mines an agent's C4 conversations for decision moments and distills the ones that generalize into numbered decision heuristics — of a person (an owner's way of deciding), a role (how a product-manager agent decides), or a domain (product-design decisions across projects).
@@ -45,7 +54,7 @@ Three decisions belong to the owner; the agent asks and writes them down.
    The policy is prose for the agent except for three lines that the script reads, each only inside its own section (the same words elsewhere in the file are treated as prose):
    - `Patterns file: <path>` under `## Target` — the only file the workflow ever writes. An existing file in the methodology's entry format is picked up as-is; numbering continues from its highest entry.
    - `Channels: all|<list>` and `Exclude channels: <list>|none` under `## Sources` — a coarse filter on the C4 channel applied at fetch time. When the exclude line is absent, `system` and `void` (scheduler notices, the agent's own memos) are excluded. Anything finer — groups, topics, people — stays prose and is the agent's judgment.
-2. **Threshold.** Optionally set `min_conversations`, `max_conversations`, `default_lookback` in `config.json`.
+2. **Threshold.** Optionally set `min_conversations`, `max_conversations`, `max_page_bytes`, `default_lookback` in `config.json`.
 3. **Schedule.** Before registering any scheduled task the agent asks the owner three things: how often it runs (cron), how far back each run looks (the lookback, default = the run interval), and a task name when it is not the first task. The template prints these questions and the registration command with the chosen values (the prompt must be used verbatim):
    ```bash
    node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template --lookback 24h --task daily --cron "50 23 * * *"
@@ -64,6 +73,7 @@ A second subject (another person, role or domain) is a second policy file, `poli
   "enabled": true,
   "min_conversations": 4,
   "max_conversations": 300,
+  "max_page_bytes": 67108864,
   "default_lookback": "24h",
   "c4_db_cli": "~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js"
 }
@@ -102,11 +112,13 @@ Every command prints JSON except `template`, which prints text unless `--json` i
 
 ## State
 
-`state.json` records `last_run_at`, `last_result`, `last_update_at`, and `last_window` (task, policy, lookback, window end). There is no cursor: each run is defined by its own window. Each commit appends one line to `logs/runs.jsonl`. `config.json`, `policy.md`, `state.json`, `logs/` and `backups/` are preserved across upgrades. The `pre-upgrade` hook copies the first three into `backups/<timestamp>/`, but the current `zylos upgrade` pipeline does not invoke component pre-upgrade hooks (zylos-core takes its own backup); run `node hooks/pre-upgrade.js` by hand if you want this component's snapshot.
+`state.json` records `last_run_at`, `last_result`, `last_update_at`, and `last_window` (task, policy, lookback, window end). There is no cursor: each run is defined by its own window. Each commit appends one line to `logs/runs.jsonl`. `config.json`, `policy.md`, `state.json`, `logs/` and `backups/` are preserved across upgrades; the `post-install` and `post-upgrade` hooks merge new defaults into `config.json` and normalize `state.json` but write only when the merged content differs from the file (owner values always win). The `pre-upgrade` hook copies the first three into `backups/<timestamp>/`, but the current `zylos upgrade` pipeline does not invoke component pre-upgrade hooks (zylos-core takes its own backup); run `node hooks/pre-upgrade.js` by hand if you want this component's snapshot.
 
-## Design Note
+## Design Notes
 
 Runs are defined by time, not by id: the owner sets how often a task runs and how far back it looks, and `c4-db.js recent N` (the newest N rows ordered by timestamp, with content) is the only C4 primitive used; it has no time-range parameter, so fetch asks for a page one row beyond the cap and doubles it until the oldest row returned predates the window (one call in the common case), stopping early at `max_page_bytes`. A time-range or content-less listing primitive on the comm-bridge side would remove the paging and its residual cost; until it exists, an incomplete read is reported, never hidden. No id-ordering assumption, no cursor to seed or repair.
+
+Architecture and the full list of design decisions live in [docs/DESIGN.md](./docs/DESIGN.md); the `fetch` output is documented field by field in [references/fetch-output.md](./references/fetch-output.md).
 
 ## Development
 
@@ -114,6 +126,10 @@ Runs are defined by time, not by id: the owner sets how often a task runs and ho
 npm test        # node:test suite; fakes the comm-bridge CLIs, no sqlite3 needed
 npm run check   # syntax check of scripts and hooks
 ```
+
+## Built by OpenMax
+
+Zylos is the open-source core of [OpenMax](https://openmax.com/) — the Human × Agent Collaboration Platform.
 
 ## License
 

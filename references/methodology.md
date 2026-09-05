@@ -6,6 +6,16 @@ extraction run. The owner's `policy.md` (in the data directory) says *whose* or
 says *how* extraction is done. When the two conflict on scope or confirmation,
 the owner's policy wins; on method and format, this file wins.
 
+## Contents
+
+- [Theoretical Basis](#theoretical-basis)
+- [Extraction Procedure (adapted from CDM)](#extraction-procedure-adapted-from-cdm)
+- [Quality Bar](#quality-bar)
+- [Classification (two-axis taxonomy)](#classification-two-axis-taxonomy)
+- [Entry Format](#entry-format)
+- [What Never Goes Into the Pattern File](#what-never-goes-into-the-pattern-file)
+- [Run Summary](#run-summary)
+
 ## Theoretical Basis
 
 - **Recognition-Primed Decision model** (Gary Klein): experts decide by

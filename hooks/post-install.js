@@ -5,7 +5,7 @@
 import {
   DATA_DIR, CONFIG_PATH, POLICY_PATH, STATE_PATH, LOG_DIR,
   DEFAULT_CONFIG, DEFAULT_STATE, POLICY_TEMPLATE,
-  ensureDir, readJson, atomicWriteJson, writeIfMissing, normalizeState, schedulerTemplate
+  ensureDir, readJson, writeJsonIfChanged, writeIfMissing, normalizeState, schedulerTemplate
 } from '../scripts/lib.js';
 
 console.log('[post-install] Setting up thinking-patterns...');
@@ -15,8 +15,8 @@ ensureDir(LOG_DIR);
 if (writeIfMissing(CONFIG_PATH, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`)) {
   console.log('Created config.json');
 } else {
-  atomicWriteJson(CONFIG_PATH, { ...DEFAULT_CONFIG, ...readJson(CONFIG_PATH, DEFAULT_CONFIG) });
-  console.log('Config exists; ensured default fields');
+  const changed = writeJsonIfChanged(CONFIG_PATH, { ...DEFAULT_CONFIG, ...readJson(CONFIG_PATH, DEFAULT_CONFIG) });
+  console.log(changed ? 'Config exists; added missing default fields' : 'Config exists; up to date');
 }
 
 if (writeIfMissing(POLICY_PATH, POLICY_TEMPLATE)) {
@@ -28,8 +28,8 @@ if (writeIfMissing(POLICY_PATH, POLICY_TEMPLATE)) {
 if (writeIfMissing(STATE_PATH, `${JSON.stringify(DEFAULT_STATE, null, 2)}\n`)) {
   console.log('Created state.json');
 } else {
-  atomicWriteJson(STATE_PATH, normalizeState(readJson(STATE_PATH, DEFAULT_STATE)));
-  console.log('State exists; ensured default fields');
+  const changed = writeJsonIfChanged(STATE_PATH, normalizeState(readJson(STATE_PATH, DEFAULT_STATE)));
+  console.log(changed ? 'State exists; normalized' : 'State exists; up to date');
 }
 
 console.log(`

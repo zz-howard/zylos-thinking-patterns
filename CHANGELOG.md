@@ -8,25 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Repository skeleton (package metadata, development guides, changelog).
-- `references/methodology.md`: the fixed extraction procedure (CDM-adapted), two-axis `[Domain | Type]` taxonomy, entry and Reinforced-block format, quality bar, and run-summary rules.
-- `scripts/extract.js` CLI (`fetch`, `commit`, `inspect`, `status`, `template`). `fetch` reads a time window (`--lookback`, per scheduled task) via the comm-bridge CLI (`c4-db.js recent`), no cursor, no direct database access; `max_conversations` caps a run and flags truncation.
-- `SKILL.md`: owner setup, background-subagent execution model, inner workflow, write boundary (append-only to the configured pattern file).
-- Owner `policy.md` template (subject / sources / domains / confirmation mode / notification / guidance) with an `UNCONFIGURED` marker that makes runs skip until filled in; scheduler-task template printed by `extract.js template` with the three questions to ask the owner (interval, lookback, task name) — the owner sets the schedule, post-install registers nothing. Several tasks with different lookbacks may share one policy.
-- Lifecycle hooks: post-install (data dir, defaults, template, owner-action message), pre-upgrade (backup config/policy/state), post-upgrade (merge new config defaults, normalize state).
-- `node:test` suite covering fetch/commit/inspect/status/template and the lifecycle hooks with fake comm-bridge CLIs.
-- Policy owns the target file: `## Target` → `Patterns file:` line in `policy.md` replaces `patterns_file` in `config.json`; runs skip as `unconfigured` until the line exists.
-- Multiple subjects: `policy-<name>.md` selected with `--policy <name>` on every command; scheduler tasks for it are named `thinking-patterns-<name>[-<task>]`.
-- Policy `## Sources` carries two machine-read lines, `Channels:` and `Exclude channels:` (default exclude `system, void`), applied by `fetch` as a coarse channel filter and echoed back as `filters` / `filtered_out`.
-- `inspect` / `fetch` report the pattern file's Domain and Type distribution and an entry index (`patterns.entries`: number, title, tag, reinforcement count) so the agent screens candidates against the index before reading entries in full.
-- Times the agent reads are in the owner's zone with an explicit offset: `fetch` renders `window.begin` / `window.end` and every transcript timestamp as `YYYY-MM-DD HH:MM:SS +HH:MM` in `TZ` (echoed as `window.time_zone`); C4's zone-less UTC strings are only parsed, never shown. Selection is unchanged (epoch comparison), covered by a multi-zone test.
-- `min_conversations` defaults to 4 (about two exchanges) instead of 30: a skip triggers no catch-up read (later runs take their own windows, so messages outside every later window are never read), and the methodology already treats an empty extraction as a normal outcome, so a high threshold only lost quiet days (decided by Howard in review).
-- `fetch` / `inspect` / `status` report `policy_placeholders`: policy sections that still contain the template's `(fill in` marker, for the agent to relay to the owner; the run itself proceeds.
+- `references/methodology.md`: the fixed extraction procedure (CDM-adapted), two-axis `[Domain | Type]` taxonomy, entry and Reinforced-block format, quality bar, and run-summary rules (#1).
+- `scripts/extract.js` CLI (`fetch`, `commit`, `inspect`, `status`, `template`). `fetch` reads a time window (`--lookback`, per scheduled task) through the comm-bridge CLI (`c4-db.js recent N`) — no cursor, no direct database access. The page grows until the window is covered; `max_page_bytes` (default 64 MiB) bounds what this process parses from one call, and an incomplete read is reported (`window_complete: false`, `truncated: true`, `truncated_out: null`) rather than hidden. `max_conversations` is applied after the window and the policy's channel filter, so excluded channels never use up the cap (#1).
+- `SKILL.md`: owner setup, background-subagent execution model, inner workflow, write boundary (append-only to the configured pattern file) (#1).
+- Owner `policy.md` with an `UNCONFIGURED` marker that makes runs skip until it is filled in. The policy owns the target file (`## Target` → `Patterns file:`) and the coarse channel filter (`## Sources` → `Channels:` / `Exclude channels:`, default exclude `system, void`); those lines are read only inside their own sections, so owner prose elsewhere is never mistaken for configuration (#1).
+- Scheduler-task template printed by `extract.js template` with the three questions to ask the owner (interval, lookback, task name); the printed command single-quotes the prompt so its backticks and quotes reach the scheduler verbatim. Post-install registers nothing — the owner sets the schedule. Several tasks with different lookbacks may share one policy (#1).
+- Multiple subjects: `policy-<name>.md` selected with `--policy <name>` on every command; scheduler tasks for it are named `thinking-patterns-<name>[-<task>]` (#1).
+- `inspect` / `fetch` report the pattern file's Domain and Type distribution and an entry index (`patterns.entries`: number, title, tag, reinforcement count) so the agent screens candidates against the index before reading entries in full; `policy_placeholders` lists policy sections still holding the template's `(fill in` marker (#1).
+- Times the agent reads are rendered in the owner's zone with an explicit offset (`YYYY-MM-DD HH:MM:SS +HH:MM`, `TZ` from `.env`, echoed as `window.time_zone`); selection compares instants and is covered by a multi-zone test (#1).
+- `min_conversations` defaults to 4 (about two exchanges): a skip triggers no catch-up read — later runs take their own windows, so messages outside every later window are never read — and the methodology treats an empty extraction as a normal outcome, so a high threshold only lost quiet days (decided by Howard in review) (#1).
+- Lifecycle hooks: post-install (data dir, defaults, policy template, owner-action message), pre-upgrade (backup config/policy/state; not invoked by the current zylos-core upgrade pipeline, documented as such), post-upgrade (merge new config defaults, normalize state) (#1).
+- `node:test` suite covering fetch/commit/inspect/status/template and the lifecycle hooks with fake comm-bridge and scheduler CLIs; CLI output is written synchronously so a large transcript is not truncated on a pipe (#1).
+- `docs/DESIGN.md` (architecture, data flow, design decisions) and `references/fetch-output.md` (field-by-field reference for the `fetch` JSON); `references/methodology.md` gains a table of contents (#2).
 
-### Fixed
-- CLI output is written synchronously so a large transcript (a 7d window) is not truncated on a pipe.
-- The printed scheduler registration command single-quotes the prompt: its backticks and double quotes are data, so registering a task no longer runs `fetch` in the shell or alters the prompt (review finding; covered by a fake-shell end-to-end test).
-- Policy lines are read only inside their own sections (`Patterns file:` under `## Target`, channel lines under `## Sources`), so owner prose elsewhere cannot be mistaken for configuration.
-- The comm-bridge call no longer goes through a pipe buffer: `c4-db.js recent N` writes to a private temp file (0600, removed on every path) that is measured before it is parsed. A page over `max_page_bytes` (new config key, default 64 MiB) is discarded unread and fetch works from the previous page, reporting `window_complete: false`, `truncated: true`, `truncated_out: null`; too few messages on such a read skip as `incomplete_read` with an `owner_action`, not as `below_threshold`. This bounds what this process parses; the comm-bridge CLI still materializes the page in its own memory and on temp disk (review finding on the paging change; a time-range primitive on the C4 side is the real fix).
-- `max_conversations` is applied last — window, then the policy's channel filter, then the cap — so excluded channels never use up the cap and, on a complete read, `truncated` means the window holds more in-scope messages than the cap (`truncated_out` says how many were left out; the newest are kept). On an incomplete read (`window_complete: false`, below) `truncated` is also true and `truncated_out` is null. Because `c4-db.js recent N` has no time-range parameter, fetch asks for one row beyond the cap and doubles the page until the oldest row predates the window.
-- README states that the pre-upgrade backup hook is not invoked by the current core upgrade pipeline; AGENTS.md / CLAUDE.md lifecycle tables say the same.
+### Changed
+- Post-install and post-upgrade hooks write `config.json` / `state.json` only when the merged content differs from the file on disk (compared with sorted keys), so re-running a hook on an up-to-date data directory touches nothing; owner values still win over defaults (#2).
+- Printed install paths (`SKILL.md`, `extract.js`, the scheduler CLI, and the default `c4_db_cli`) follow `ZYLOS_DIR` when it is set, and default to `~/zylos` as before (#2).
+- `SKILL.md` body no longer repeats the frontmatter triggers and points to `references/fetch-output.md` instead of carrying the full field reference inline; the unused `config.optional` environment-variable declaration is removed (the threshold is a `config.json` key, not an env override) (#2).
+- `AGENTS.md` / `CLAUDE.md` replaced with the component-level conventions from the zylos component template (release hard gate, testing rules) plus component-specific rules; `SKILL_DIR` resolution uses `fileURLToPath(import.meta.url)` so the declared `node >=20.0.0` engine range is accurate; README gains the template badge row, a `max_page_bytes` line in the configuration block, and a Built by OpenMax section; LICENSE holder aligned with `package.json` author (#2).
+
+### Upgrade Notes
+
+Initial release. For fresh installation:
+
+```bash
+zylos add zz-howard/zylos-thinking-patterns
+```
+
+No migration required. `config.json`, `policy.md`, `state.json`, `logs/` and `backups/` are preserved across upgrades.
