@@ -1094,3 +1094,139 @@ test('printed commands run when ZYLOS_DIR holds a space and a single quote, and 
     assert.equal(argv[1], expected, `${c.name}: prompt byte-for-byte`);
   }
 });
+
+// --- 0.2.0: read-only lint of the pattern file (#4) ---
+
+const LINT_FIXTURE = [
+  '# Patterns',
+  '',
+  '## 1. Mechanism over Policy — 「机制优先」',
+  '`[Domain: Architecture | Type: Constraint]`',
+  '',
+  '**Related patterns**:',
+  '- #2 (Ship the skeleton) — #2 is the process instance',
+  '- Connects to Pattern #9 (does not exist)',
+  '- Whitelist over blacklist (explicit > implicit)',
+  '- Ship the skeleton first — names the target by title only, no number',
+  '- see Issue #1 and PR #2 for the tickets only',
+  '- #640 integration harness — a bare ticket number is reported as dangling; the owner rewrites the line',
+  '- **Reinforced (2026-09-01)**: a Reinforced block written as a bullet ends the list',
+  '- #9 would be dangling if this line were still part of the list',
+  '',
+  '---',
+  '',
+  '## 2. Ship the skeleton first',
+  '`[Domain: Process/Strategy | Type: Heuristic]`',
+  '',
+  '**Related patterns**:',
+  '',
+  '- #1 (Mechanism over Policy) — reverse link',
+  '',
+  '**Reinforced (2026-09-02)**: again',
+  '- a bullet after the list ended is not a relation',
+  '',
+  '## 12. Untagged',
+  ''
+].join('\n');
+
+test('lint reports Type outside the six, compound Domain, Related lines without #N and dangling #N — and changes nothing', () => {
+  const { patternsFile, env } = setup(makeRows([10]));
+  fs.writeFileSync(patternsFile, LINT_FIXTURE);
+  const before = fs.statSync(patternsFile).mtimeMs;
+
+  const lint = JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.lint;
+
+  assert.deepEqual(lint.type_off_vocabulary, [{ number: 2, type: 'Heuristic' }]);
+  assert.deepEqual(lint.compound_domain, [{ number: 2, domain: 'Process/Strategy', separator: '/' }]);
+  assert.deepEqual(lint.related_dangling, [{ number: 1, ref: 9 }, { number: 1, ref: 640 }], 'unresolved #N are dangling whatever their size; not the #9 after the Reinforced bullet');
+  assert.deepEqual(lint.related_without_number.map(x => [x.number, x.located]), [[1, null], [1, 2], [1, null]]);
+  assert.match(lint.related_without_number[2].text, /Issue #1 and PR #2/, 'ticket refs with their word do not make a line "numbered"');
+  assert.deepEqual(lint.summary, {
+    type_off_vocabulary: 1, compound_domain: 1, related_lines: 7, related_without_number: 3, related_located: 1, related_dangling: 2
+  });
+  assert.equal(fs.statSync(patternsFile).mtimeMs, before, 'lint is read-only');
+  assert.equal(fs.readFileSync(patternsFile, 'utf8'), LINT_FIXTURE);
+});
+
+test('lint carries into fetch, and the entry index does not grow a related field', () => {
+  const { patternsFile, env } = setup(makeRows([30, 10]));
+  fs.writeFileSync(patternsFile, LINT_FIXTURE);
+
+  const fetch = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(fetch.status, 'ready');
+  assert.equal(fetch.patterns.lint.summary.type_off_vocabulary, 1);
+  assert.deepEqual(Object.keys(fetch.patterns.entries[0]).sort(), ['domain', 'number', 'reinforced', 'title', 'type']);
+});
+
+test('negative control: a file that follows the methodology lints clean, and a missing file lints empty', () => {
+  const { patternsFile, env } = setup(makeRows([10]));
+  fs.writeFileSync(patternsFile, [
+    '## 1. One', '`[Domain: Process | Type: Temporal]`', '', '**Related patterns**:', '- #2 (Two) — pairs with this', '', '---', '',
+    '## 2. Two', '`[Domain: People | Type: Delegation]`', '', '**Related patterns**:', '- #1 (One) — reverse', ''
+  ].join('\n'));
+  const clean = JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.lint;
+  assert.deepEqual(clean.summary, { type_off_vocabulary: 0, compound_domain: 0, related_lines: 2, related_without_number: 0, related_located: 0, related_dangling: 0 });
+  assert.deepEqual([clean.type_off_vocabulary, clean.compound_domain, clean.related_without_number, clean.related_dangling], [[], [], [], []]);
+
+  fs.rmSync(patternsFile);
+  const missing = JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns;
+  assert.equal(missing.exists, false);
+  assert.deepEqual(missing.lint.summary, { type_off_vocabulary: 0, compound_domain: 0, related_lines: 0, related_without_number: 0, related_located: 0, related_dangling: 0 });
+});
+
+test('negative control: each lint class can fail — one mutation per class flips its count from 0', async () => {
+  const { lintPatternEntries, parsePatternEntries } = await import('../scripts/lib.js');
+  const base = '## 1. Alpha entry\n`[Domain: Process | Type: Constraint]`\n\n**Related patterns**:\n- #2 (Beta) — ok\n\n## 2. Beta entry\n`[Domain: People | Type: Temporal]`\n';
+  assert.equal(Object.values(lintPatternEntries(parsePatternEntries(base)).summary).filter((v, i) => i !== 2).reduce((a, b) => a + b, 0), 0);
+  const mutants = {
+    type_off_vocabulary: base.replace('Type: Constraint', 'Type: Heuristic'),
+    compound_domain: base.replace('Domain: Process', 'Domain: Process/People'),
+    related_without_number: base.replace('- #2 (Beta) — ok', '- Beta — no number'),
+    related_dangling: base.replace('- #2 (Beta) — ok', '- #1 and #2 fine, #2 again fine').replace('## 2. Beta entry', '## 3. Beta entry')
+  };
+  for (const [key, text] of Object.entries(mutants)) {
+    const summary = lintPatternEntries(parsePatternEntries(text)).summary;
+    assert.ok(summary[key] > 0, `${key} must be caught: ${JSON.stringify(summary)}`);
+  }
+});
+
+test('lint: review boundaries — small file dangling, ambiguous titles, exact short title, wrapped bullet, "Data & Metrics"', async () => {
+  const { lintPatternEntries, parsePatternEntries } = await import('../scripts/lib.js');
+  const lint = text => lintPatternEntries(parsePatternEntries(text));
+
+  // Only #1/#2 exist: "#99" is dangling, not a ticket, whatever its size (jinglever, review of fa983d7).
+  const small = lint('## 1. One\n`[Domain: Process | Type: Temporal]`\n\n**Related patterns**:\n- #99 (Missing target) — related\n- Pattern #98 — also missing\n\n## 2. Two\n`[Domain: People | Type: Delegation]`\n');
+  assert.deepEqual(small.related_dangling, [{ number: 1, ref: 99 }, { number: 1, ref: 98 }]);
+  assert.equal(small.summary.related_without_number, 0);
+
+  // Two titles share the prefix before the dash: a line naming the full second title locates #3, a line naming only the prefix locates nothing.
+  const amb = lint([
+    '## 1. Origin', '`[Domain: Process | Type: Temporal]`', '', '**Related patterns**:',
+    '- Shared principle — Second case — names the third entry in full',
+    '- Shared principle — the prefix alone is ambiguous',
+    '- 机制优先 — an exact short title locates the fourth entry',
+    '- Data & Metrics is one Domain, not two',
+    '', '## 2. Shared principle — First case', '`[Domain: Process | Type: Constraint]`', '',
+    '## 3. Shared principle — Second case', '`[Domain: Process | Type: Constraint]`', '',
+    '## 4. 机制优先', '`[Domain: Data & Metrics | Type: Constraint]`', ''
+  ].join('\n'));
+  assert.deepEqual(amb.related_without_number.map(x => x.located), [3, null, 4, null]);
+  // Issue #4 scope: "A/B", "A, B" and "A & B" are all reported, each with its separator,
+  // so the owner can tell a legal "&" name ("Data & Metrics") from a combined value.
+  assert.deepEqual(amb.compound_domain, [{ number: 4, domain: 'Data & Metrics', separator: '&' }]);
+  assert.equal(amb.summary.related_located, 2);
+  const shapes = lint('## 1. A\n`[Domain: Process, People | Type: Temporal]`\n\n## 2. B\n`[Domain: Process & People | Type: Temporal]`\n\n## 3. C\n`[Domain: Process/People | Type: Temporal]`\n\n## 4. D\n`[Domain: Data-Metrics | Type: Temporal]`\n');
+  assert.deepEqual(shapes.compound_domain.map(x => [x.number, x.separator]), [[1, ','], [2, '&'], [3, '/']], 'each shape from the issue is reported once, with its separator');
+  assert.equal(shapes.summary.compound_domain, 3, 'a hyphenated single name is not reported (negative control)');
+
+  // A wrapped bullet continues its item; the bullets after it are still read.
+  const wrapped = lint('## 1. One\n`[Domain: Process | Type: Temporal]`\n\n**Related patterns**:\n- #2 (Two) — a long line that\n  wraps onto a second line\n- #3 (Three) — still part of the list\n- Four — no number\n\n**Reinforced (2026-09-01)**: ends it\n- not a relation\n\n## 2. Two\n`[Domain: Process | Type: Temporal]`\n\n## 3. Three\n`[Domain: Process | Type: Temporal]`\n');
+  assert.equal(wrapped.summary.related_lines, 3);
+  assert.deepEqual(wrapped.related_dangling, []);
+  assert.deepEqual(wrapped.related_without_number.map(x => x.text), ['Four — no number']);
+
+  // Negative control for the wrap rule: a bold label ends the list even mid-way.
+  const ended = lint('## 1. One\n`[Domain: Process | Type: Temporal]`\n\n**Related patterns**:\n- #5 dangling\n**Reinforced (2026-09-01)**: x\n- #6 not read\n');
+  assert.deepEqual(ended.related_dangling, [{ number: 1, ref: 5 }]);
+});
