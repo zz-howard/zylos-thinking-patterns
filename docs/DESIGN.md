@@ -1,7 +1,7 @@
 # zylos-thinking-patterns Design Document
 
 **Date**: 2026-09-05
-**Author**: Zylos AI
+**Author**: Howard Zhou
 **Repository**: https://github.com/zz-howard/zylos-thinking-patterns
 **Status**: Current (reflects the tree at the time of the 0.1.0 release)
 
