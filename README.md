@@ -14,7 +14,6 @@
   <a href="https://discord.gg/GS2J39EGff"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://x.com/ZylosAI"><img src="https://img.shields.io/badge/X-follow-000000?logo=x&logoColor=white" alt="X"></a>
   <a href="https://zylos.ai"><img src="https://img.shields.io/badge/website-zylos.ai-blue" alt="Website"></a>
-  <a href="https://openmax.com"><img src="https://img.shields.io/badge/Built%20by-OpenMax-orange" alt="Built by OpenMax"></a>
 </p>
 
 ---
@@ -126,10 +125,6 @@ Architecture and the full list of design decisions live in [docs/DESIGN.md](./do
 npm test        # node:test suite; fakes the comm-bridge CLIs, no sqlite3 needed
 npm run check   # syntax check of scripts and hooks
 ```
-
-## Built by OpenMax
-
-Zylos is the open-source core of [OpenMax](https://openmax.com/) — the Human × Agent Collaboration Platform.
 
 ## License
 
