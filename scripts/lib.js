@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 
 export const HOME = os.homedir();
 export const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(HOME, 'zylos');
@@ -26,6 +25,7 @@ export const DEFAULT_CONFIG = {
   enabled: true,
   min_conversations: 30,
   max_conversations: 300,
+  max_page_bytes: 64 * 1024 * 1024,
   default_lookback: '24h',
   c4_db_cli: '~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js'
 };
@@ -325,12 +325,6 @@ export function loadState() {
 // Node's default maxBuffer is 1 MiB; a capped page of 300 rows can exceed that
 // on its own (300 × 4 KB of content plus JSON framing). 64 MiB leaves room for
 // long messages without letting a runaway response exhaust memory.
-export const RUN_MAX_BUFFER = 64 * 1024 * 1024;
-
-export function run(command, args) {
-  return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: RUN_MAX_BUFFER });
-}
-
 export function policyIsUnconfigured(policyPath = POLICY_PATH) {
   if (!fs.existsSync(policyPath)) return true;
   return fs.readFileSync(policyPath, 'utf8').includes(UNCONFIGURED_MARKER);

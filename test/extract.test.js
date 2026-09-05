@@ -281,6 +281,93 @@ test('fetch keeps asking for a larger page until the whole window is in hand', (
   assert.match(result.conversations, /age 20m/);
 });
 
+function c4TempDirs() {
+  return fs.readdirSync(os.tmpdir()).filter(name => name.startsWith('thinking-patterns-') && !name.startsWith('thinking-patterns-test-')).length;
+}
+
+test('the read is bounded by max_page_bytes: a page that would exceed it is never parsed', () => {
+  // 20 short in-window rows, cap 3. Pages of 4 and 8 rows fit under the
+  // bound, the 16-row page does not, so fetch keeps the 8 newest rows,
+  // says the window was not read completely and leaves truncated_out unknown.
+  const { env } = setup(makeRows(Array.from({ length: 20 }, (_, i) => 200 - i * 5)), { max_conversations: 3, min_conversations: 1, max_page_bytes: 2000 });
+  const before = c4TempDirs();
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.count, 3);
+  assert.equal(result.window_complete, false);
+  assert.equal(result.truncated, true);
+  assert.equal(result.truncated_out, null);
+  assert.equal(result.max_page_bytes, 2000);
+  assert.match(result.conversations, /message 20 /);
+  assert.match(result.conversations, /message 18 /);
+  assert.doesNotMatch(result.conversations, /message 12 /);
+  assert.equal(c4TempDirs(), before, 'no temp page left behind');
+});
+
+test('large out-of-window rows behind the first page cannot blow the read (reviewer repro, scaled down)', () => {
+  // Four short in-window rows followed (older) by four 3 KB rows outside the
+  // window. The 4-row page fits; the 8-row page would carry 12 KB of old
+  // content, so with a 6 KB bound it is discarded unread: fetch works from
+  // the four short rows, caps to 3 and reports the window as incomplete.
+  // With the default bound the same data is read completely.
+  const big = makeRows([30 * 60, 31 * 60, 32 * 60, 33 * 60], { channel: 'void' })
+    .map((r, i) => ({ ...r, id: 100 + i, content: 'x'.repeat(3000) }));
+  const short = makeRows([40, 30, 20, 10]);
+  const rows = [...big, ...short];
+
+  const bounded = JSON.parse(runNode(EXTRACT, ['fetch'], setup(rows, { max_conversations: 3, min_conversations: 1, max_page_bytes: 6000 }).env));
+  const full = JSON.parse(runNode(EXTRACT, ['fetch'], setup(rows, { max_conversations: 3, min_conversations: 1 }).env));
+
+  assert.equal(bounded.status, 'ready');
+  assert.equal(bounded.count, 3);
+  assert.equal(bounded.window_complete, false);
+  assert.equal(bounded.truncated, true);
+  assert.equal(bounded.truncated_out, null);
+  assert.match(bounded.conversations, /age 10m/);
+  assert.doesNotMatch(bounded.conversations, /age 40m/);
+
+  assert.equal(full.count, 3);
+  assert.equal(full.window_complete, true);
+  assert.equal(full.truncated, true);
+  assert.equal(full.truncated_out, 1);
+  assert.equal(full.filtered_out, 0);
+});
+
+test('a first page over max_page_bytes is a JSON error naming the knobs, not ENOBUFS', () => {
+  const { env } = setup(makeRows([30, 20, 10]), { max_conversations: 3, min_conversations: 1, max_page_bytes: 100 });
+  const before = c4TempDirs();
+
+  const result = JSON.parse(runNodeFailure(EXTRACT, ['fetch'], env).stdout);
+
+  assert.match(result.error, /over max_page_bytes \(100\); lower max_conversations or raise max_page_bytes/);
+  assert.equal(c4TempDirs(), before);
+});
+
+test('too few messages after an incomplete read is reported as incomplete_read, not below_threshold', () => {
+  // Same bounded fixture as above but min_conversations 10: the 3 in-scope
+  // rows the read could reach say nothing about the unread part of the window.
+  const { env } = setup(makeRows(Array.from({ length: 20 }, (_, i) => 200 - i * 5)), { max_conversations: 3, min_conversations: 10, max_page_bytes: 2000 });
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.status, 'skip');
+  assert.equal(result.reason, 'incomplete_read');
+  assert.equal(result.window_complete, false);
+  assert.match(result.owner_action, /newest 8 rows .* max_page_bytes \(2000\) .* 3 in-scope messages, below min_conversations \(10\)/);
+  assert.equal(result.conversations, undefined);
+});
+
+test('a complete read reports window_complete: true and exact truncated_out', () => {
+  const { env } = setup(makeRows([50, 40, 30, 20, 10]), { max_conversations: 3, min_conversations: 1 });
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.window_complete, true);
+  assert.equal(result.truncated_out, 2);
+});
+
 test('fetch flags truncation when the cap hides older in-window rows', () => {
   const { env } = setup(makeRows([50, 40, 30, 20, 10]), { max_conversations: 3, min_conversations: 1 });
 

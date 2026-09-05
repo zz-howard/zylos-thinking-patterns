@@ -5,11 +5,14 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   CONFIG_PATH, STATE_PATH, LOG_DIR, RUN_LOG_PATH, METHODOLOGY_PATH,
   DEFAULT_CONFIG, SCHEDULE_QUESTIONS, POLICY_TEMPLATE,
   atomicWriteJson, ensureDir, expandHome, formatLocalTimestamp, formatTranscript, inspectPatternsFile,
-  loadConfig, loadState, localTimeZone, normalizePolicyName, normalizeTaskName, parseC4Timestamp, parseDuration, readPolicy, run,
+  loadConfig, loadState, localTimeZone, normalizePolicyName, normalizeTaskName, parseC4Timestamp, parseDuration, readPolicy,
   schedulerPrompt, schedulerTaskName, schedulerTemplate
 } from './lib.js';
 
@@ -69,13 +72,37 @@ function requireScript(filePath, label) {
 }
 
 // `c4-db.js recent N` returns the N newest rows ordered by timestamp, oldest first,
-// each with its content — exactly the primitive a time window needs.
-function recentRows(c4DbCli, limit) {
-  const raw = run('node', [c4DbCli, 'recent', String(limit)]).trim();
-  if (!raw) return [];
-  const parsed = JSON.parse(raw);
-  if (!Array.isArray(parsed)) throw new Error('c4-db.js recent did not return a JSON array');
-  return parsed.map(row => ({ ...row, _ms: parseC4Timestamp(row.timestamp) }));
+// each with its content — exactly the primitive a time window needs. Its output
+// goes to a private temp file, not a pipe buffer, so a page can be measured
+// before anything is parsed: a page larger than maxBytes is discarded unread
+// (`rows: null`) instead of failing with ENOBUFS or being parsed into memory.
+// What this bounds is this process: the comm-bridge CLI still builds the whole
+// page in its own memory and the page still lands on temp disk before it is
+// measured. A time-range or content-less primitive on the C4 side is the only
+// way to bound those; until then that residual cost is documented, not closed.
+function recentPage(c4DbCli, limit, maxBytes) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'thinking-patterns-'));
+  const file = path.join(dir, 'recent.json');
+  try {
+    const fd = fs.openSync(file, 'wx', 0o600);
+    let result;
+    try {
+      result = spawnSync('node', [c4DbCli, 'recent', String(limit)], { stdio: ['ignore', fd, 'pipe'], encoding: 'utf8' });
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`c4-db.js recent ${limit} failed (exit ${result.status}): ${String(result.stderr).trim()}`);
+    const bytes = fs.statSync(file).size;
+    if (bytes > maxBytes) return { rows: null, bytes };
+    const raw = fs.readFileSync(file, 'utf8').trim();
+    if (!raw) return { rows: [], bytes };
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error('c4-db.js recent did not return a JSON array');
+    return { rows: parsed.map(row => ({ ...row, _ms: parseC4Timestamp(row.timestamp) })), bytes };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // `recent N` has no time-range parameter, so ask for a growing page until the
@@ -83,11 +110,24 @@ function recentRows(c4DbCli, limit) {
 // more rows). Only then are all in-window rows in hand for filtering and
 // capping. The first page is one row beyond the cap, so the common case
 // (a window smaller than the cap) still costs a single call.
-function windowRows(c4DbCli, beginMs, firstPage) {
+//
+// The read is bounded by max_page_bytes: when the next page would exceed it,
+// the previous page (the newest rows, all inside the window) is used and
+// `complete: false` says the oldest part of the window was not read. The
+// cost of larger pages is then never paid, whatever the messages contain.
+function windowRows(c4DbCli, beginMs, firstPage, maxBytes) {
   let limit = firstPage;
+  let previous = null;
   for (;;) {
-    const page = recentRows(c4DbCli, limit);
-    if (page.length < limit || page[0]._ms < beginMs) return page;
+    const { rows, bytes } = recentPage(c4DbCli, limit, maxBytes);
+    if (rows === null) {
+      if (previous === null) {
+        throw new Error(`c4-db.js recent ${limit} returned ${bytes} bytes, over max_page_bytes (${maxBytes}); lower max_conversations or raise max_page_bytes in config.json`);
+      }
+      return { rows: previous, complete: false };
+    }
+    if (rows.length < limit || rows[0]._ms < beginMs) return { rows, complete: true };
+    previous = rows;
     limit *= 2;
   }
 }
@@ -117,6 +157,10 @@ function commandFetch(args) {
   if (!Number.isSafeInteger(maxConversations) || maxConversations < 1) {
     throw new Error(`Invalid max_conversations: ${config.max_conversations}`);
   }
+  const maxPageBytes = Number(config.max_page_bytes ?? DEFAULT_CONFIG.max_page_bytes);
+  if (!Number.isSafeInteger(maxPageBytes) || maxPageBytes < 1) {
+    throw new Error(`Invalid max_page_bytes: ${config.max_page_bytes}`);
+  }
 
   const endMs = Date.now();
   const beginMs = endMs - lookbackMs;
@@ -130,6 +174,7 @@ function commandFetch(args) {
     count: 0,
     min_conversations: minConversations,
     max_conversations: maxConversations,
+    max_page_bytes: maxPageBytes,
     ...policySummary(policy),
     methodology_file: METHODOLOGY_PATH,
     state_file: STATE_PATH
@@ -157,23 +202,35 @@ function commandFetch(args) {
   // Order matters: window → channel filter → cap. The cap is applied to the
   // messages the agent would actually read, so `truncated` means "the window
   // holds more in-scope messages than max_conversations", and rows that the
-  // filter removes never use up the cap.
-  const inWindow = windowRows(c4DbCli, beginMs, maxConversations + 1).filter(row => row._ms >= beginMs && row._ms <= endMs);
+  // filter removes never use up the cap. When the read bound stopped the
+  // paging early (window_complete: false) the oldest part of the window is
+  // unknown: truncated is set and truncated_out is null.
+  const read = windowRows(c4DbCli, beginMs, maxConversations + 1, maxPageBytes);
+  const inWindow = read.rows.filter(row => row._ms >= beginMs && row._ms <= endMs);
   const include = policy.channels === null ? null : new Set(policy.channels);
   const exclude = new Set(policy.exclude_channels);
   const inScope = inWindow.filter(row => (include === null || include.has(row.channel)) && !exclude.has(row.channel));
-  const truncated = inScope.length > maxConversations;
+  const capped = inScope.length > maxConversations;
   // Rows are oldest-first; when capping, keep the newest and leave out the oldest.
-  const rows = truncated ? inScope.slice(inScope.length - maxConversations) : inScope;
+  const rows = capped ? inScope.slice(inScope.length - maxConversations) : inScope;
   const envelope = {
     ...base,
     count: rows.length,
     filtered_out: inWindow.length - inScope.length,
-    truncated,
-    truncated_out: inScope.length - rows.length
+    truncated: capped || !read.complete,
+    truncated_out: read.complete ? inScope.length - rows.length : null,
+    window_complete: read.complete
   };
 
   if (rows.length < minConversations) {
+    // Below threshold on an incomplete read is not "the window was quiet":
+    // the unread, older part may hold enough. Say so, and what the owner can do.
+    if (!read.complete) {
+      outputJson({
+        status: 'skip', reason: 'incomplete_read', ...envelope,
+        owner_action: `only the newest ${read.rows.length} rows of the window fit under max_page_bytes (${maxPageBytes}) and they hold ${rows.length} in-scope messages, below min_conversations (${minConversations}); raise max_page_bytes, shorten the lookback, or lower max_conversations`
+      });
+    }
     outputJson({ status: 'skip', reason: 'below_threshold', ...envelope });
   }
   outputJson({
