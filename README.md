@@ -70,7 +70,7 @@ A second subject (another person, role or domain) is a second policy file, `poli
 ```
 
 - `min_conversations` — below this many messages inside the window the run is recorded as `skip`.
-- `max_conversations` — the most messages a single run will read; when a window holds more, the oldest part is left out and the fetch result says `truncated: true`.
+- `max_conversations` — the most messages a single run will read, counted after the policy's channel filter; when a window holds more in-scope messages, the oldest are left out and the fetch result says `truncated: true` with `truncated_out` = how many.
 - `default_lookback` — used when a task does not pass `--lookback`. Each scheduled task normally carries its own.
 
 The target pattern file is not in config: it is the policy's `Patterns file` line; config carries no copy of it.
@@ -79,7 +79,7 @@ The target pattern file is not in config: it is the policy's `Patterns file` lin
 
 A recurring scheduler task dispatches the skill. The main session launches a **background subagent** and only marks the task done afterwards. The subagent:
 
-1. `extract.js fetch --lookback <d> --task <name> [--policy <p>]` — asks comm-bridge for the newest rows, keeps those inside the lookback window (compared as instants; the window and every transcript timestamp are rendered in the owner's time zone — `TZ` from `.env` — with the UTC offset spelled out, e.g. `2026-09-05 19:20:14 +08:00`), applies the policy's channel filter (echoed back as `filters` / `filtered_out`), checks the threshold and the policy marker, reports policy sections still holding template placeholders (`policy_placeholders`), and summarizes the target file (next entry number, Domain/Type distribution, and an index of existing entries by number, title and tag so de-duplication starts from the index rather than a full re-read).
+1. `extract.js fetch --lookback <d> --task <name> [--policy <p>]` — asks comm-bridge for the newest rows (growing the page until the whole window is in hand), keeps those inside the lookback window (compared as instants; the window and every transcript timestamp are rendered in the owner's time zone — `TZ` from `.env` — with the UTC offset spelled out, e.g. `2026-09-05 19:20:14 +08:00`), applies the policy's channel filter (echoed back as `filters` / `filtered_out`), then caps at `max_conversations` (newest kept, `truncated` / `truncated_out`), checks the threshold and the policy marker, reports policy sections still holding template placeholders (`policy_placeholders`), and summarizes the target file (next entry number, Domain/Type distribution, and an index of existing entries by number, title and tag so de-duplication starts from the index rather than a full re-read).
 2. Reads `policy.md`, `references/methodology.md`, and the current pattern file.
 3. Applies the methodology: detect decision moments → extract cues and rationale → induce candidates → reinforce an existing entry, flag a contradiction, or create a new numbered entry → apply the quality bar. Extracting nothing is a normal outcome.
 4. Writes (or holds candidates) per the policy's confirmation mode and notifies the owner's endpoint if the policy asks for it.
@@ -105,7 +105,7 @@ Every command prints JSON except `template`, which prints text unless `--json` i
 
 ## Design Note
 
-Runs are defined by time, not by id: the owner sets how often a task runs and how far back it looks, and `c4-db.js recent N` (the newest N rows ordered by timestamp, with content) is the only C4 primitive used. No id-ordering assumption, no second fetch call, no cursor to seed or repair.
+Runs are defined by time, not by id: the owner sets how often a task runs and how far back it looks, and `c4-db.js recent N` (the newest N rows ordered by timestamp, with content) is the only C4 primitive used; it has no time-range parameter, so fetch asks for a page one row beyond the cap and doubles it until the oldest row returned predates the window (one call in the common case). No id-ordering assumption, no cursor to seed or repair.
 
 ## Development
 

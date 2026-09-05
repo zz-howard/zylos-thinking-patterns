@@ -78,6 +78,20 @@ function recentRows(c4DbCli, limit) {
   return parsed.map(row => ({ ...row, _ms: parseC4Timestamp(row.timestamp) }));
 }
 
+// `recent N` has no time-range parameter, so ask for a growing page until the
+// oldest row returned is older than the window start (or the database has no
+// more rows). Only then are all in-window rows in hand for filtering and
+// capping. The first page is one row beyond the cap, so the common case
+// (a window smaller than the cap) still costs a single call.
+function windowRows(c4DbCli, beginMs, firstPage) {
+  let limit = firstPage;
+  for (;;) {
+    const page = recentRows(c4DbCli, limit);
+    if (page.length < limit || page[0]._ms < beginMs) return page;
+    limit *= 2;
+  }
+}
+
 function policySummary(policy) {
   return {
     policy: policy.policy,
@@ -140,18 +154,24 @@ function commandFetch(args) {
   }
 
   const c4DbCli = requireScript(config.c4_db_cli, 'c4-db.js');
-  // One row beyond the cap is a sentinel: if it exists and lies inside the
-  // window, older in-window rows exist that this run will not read. It is
-  // never part of the transcript.
-  const page = recentRows(c4DbCli, maxConversations + 1);
-  const sentinel = page.length > maxConversations ? page[0] : null;
-  const recent = sentinel ? page.slice(1) : page;
-  const truncated = sentinel !== null && sentinel._ms >= beginMs && sentinel._ms <= endMs;
-  const inWindow = recent.filter(row => row._ms >= beginMs && row._ms <= endMs);
+  // Order matters: window → channel filter → cap. The cap is applied to the
+  // messages the agent would actually read, so `truncated` means "the window
+  // holds more in-scope messages than max_conversations", and rows that the
+  // filter removes never use up the cap.
+  const inWindow = windowRows(c4DbCli, beginMs, maxConversations + 1).filter(row => row._ms >= beginMs && row._ms <= endMs);
   const include = policy.channels === null ? null : new Set(policy.channels);
   const exclude = new Set(policy.exclude_channels);
-  const rows = inWindow.filter(row => (include === null || include.has(row.channel)) && !exclude.has(row.channel));
-  const envelope = { ...base, count: rows.length, filtered_out: inWindow.length - rows.length, truncated };
+  const inScope = inWindow.filter(row => (include === null || include.has(row.channel)) && !exclude.has(row.channel));
+  const truncated = inScope.length > maxConversations;
+  // Rows are oldest-first; when capping, keep the newest and leave out the oldest.
+  const rows = truncated ? inScope.slice(inScope.length - maxConversations) : inScope;
+  const envelope = {
+    ...base,
+    count: rows.length,
+    filtered_out: inWindow.length - inScope.length,
+    truncated,
+    truncated_out: inScope.length - rows.length
+  };
 
   if (rows.length < minConversations) {
     outputJson({ status: 'skip', reason: 'below_threshold', ...envelope });

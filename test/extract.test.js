@@ -244,6 +244,43 @@ test('two tasks with different lookbacks see different windows of the same data'
   assert.equal(weekly.count, 4);
 });
 
+test('the cap applies after the channel filter, so excluded rows never use it up', () => {
+  // Newest three rows are system notices (excluded by default); the three
+  // telegram rows behind them are exactly the cap. A cap applied before the
+  // filter would read only the system rows and find nothing.
+  const system = makeRows([5, 4, 3], { channel: 'system' }).map((r, i) => ({ ...r, id: 100 + i, content: `system ${i}` }));
+  const telegram = makeRows([30, 20, 10]);
+  const { env } = setup([...telegram, ...system], { max_conversations: 3, min_conversations: 1 });
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.count, 3);
+  assert.equal(result.filtered_out, 3);
+  assert.equal(result.truncated, false);
+  assert.equal(result.truncated_out, 0);
+  assert.match(result.conversations, /age 30m/);
+  assert.doesNotMatch(result.conversations, /system 0/);
+});
+
+test('fetch keeps asking for a larger page until the whole window is in hand', () => {
+  // Eight excluded rows sit in front of three in-scope rows; with a cap of 3
+  // the first page (4 rows) holds only excluded rows, so fetch must page
+  // further (4 → 8 → 16) before it can filter and cap correctly.
+  const system = makeRows([1, 2, 3, 4, 5, 6, 7, 8], { channel: 'system' }).map((r, i) => ({ ...r, id: 100 + i, content: `system ${i}` }));
+  const telegram = makeRows([40, 30, 20]);
+  const { env } = setup([...telegram, ...system], { max_conversations: 3, min_conversations: 1 });
+
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.count, 3);
+  assert.equal(result.filtered_out, 8);
+  assert.equal(result.truncated, false);
+  assert.match(result.conversations, /age 40m/);
+  assert.match(result.conversations, /age 20m/);
+});
+
 test('fetch flags truncation when the cap hides older in-window rows', () => {
   const { env } = setup(makeRows([50, 40, 30, 20, 10]), { max_conversations: 3, min_conversations: 1 });
 
@@ -251,7 +288,10 @@ test('fetch flags truncation when the cap hides older in-window rows', () => {
 
   assert.equal(result.count, 3);
   assert.equal(result.truncated, true);
+  assert.equal(result.truncated_out, 2);
   assert.match(result.conversations, /age 10m/);
+  assert.match(result.conversations, /age 30m/);
+  assert.doesNotMatch(result.conversations, /age 40m/);
   assert.doesNotMatch(result.conversations, /age 50m/);
 });
 
