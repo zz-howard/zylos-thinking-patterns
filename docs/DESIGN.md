@@ -31,8 +31,8 @@ zylos-thinking-patterns/
     methodology.md         — fixed extraction procedure, taxonomy, entry format, quality bar
     fetch-output.md        — field-by-field reference for the `fetch` JSON
   scripts/
-    lib.js                 — paths, defaults, policy parsing, C4 paging, templates
-    extract.js             — CLI: fetch / commit / inspect / status / template
+    lib.js                 — paths, defaults, policy parsing, templates, shell quoting
+    extract.js             — CLI: fetch / commit / inspect / status / template; C4 paging
   hooks/
     post-install.js        — data dir + defaults + policy template + owner-action message
     pre-upgrade.js         — snapshot config/policy/state into backups/<timestamp>/

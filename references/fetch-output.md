@@ -13,12 +13,13 @@ what each one means.
 - [Filtering, capping and truncation](#filtering-capping-and-truncation)
 - [`patterns`](#patterns)
 - [Skip statuses](#skip-statuses)
+- [Errors](#errors)
 
 ## Top level
 
 | Field | Meaning |
 |-------|---------|
-| `status` | `ready` (analyze) or `skip` (commit a skip and stop) |
+| `status` | `ready` (analyze), `skip` (commit a skip and stop) or `error` (see [Errors](#errors)) |
 | `reason` | Present when `status` is `skip` — see [Skip statuses](#skip-statuses) |
 | `owner_action` | Present on some skips: text to relay to the owner verbatim |
 | `task` | The task name the run was called with (`default` when none was given) |
@@ -99,3 +100,7 @@ than a full re-read:
 | `unconfigured` | The policy still carries the `UNCONFIGURED` marker or has no `Patterns file:` line | Relay `owner_action` to the owner, commit a skip, stop |
 | `below_threshold` | The window really held fewer than `min_conversations` in-scope messages | Commit a skip and stop — a quiet window is a normal outcome |
 | `incomplete_read` | The part of the window that fit under `max_page_bytes` held too few messages; the rest is unread, so this is **not** a quiet window | Relay `owner_action` to the owner, commit a skip, stop |
+
+## Errors
+
+Every command, on a bad argument, an unusable `c4_db_cli`, a comm-bridge call that fails, or any other exception, prints `{ "status": "error", "error": "<message>" }` and exits 1. Nothing else is in that envelope. An unknown command prints the usage line as the `error` text, also with exit 1. Do not commit a skip for an error: report it in the run summary and stop.
