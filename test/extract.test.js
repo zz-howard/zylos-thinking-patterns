@@ -1108,7 +1108,8 @@ const LINT_FIXTURE = [
   '- Connects to Pattern #9 (does not exist)',
   '- Whitelist over blacklist (explicit > implicit)',
   '- Ship the skeleton first — names the target by title only, no number',
-  '- see Issue #1 and PR #2 for the tickets; #640 integration harness',
+  '- see Issue #1 and PR #2 for the tickets only',
+  '- #640 integration harness — a bare ticket number is reported as dangling; the owner rewrites the line',
   '- **Reinforced (2026-09-01)**: a Reinforced block written as a bullet ends the list',
   '- #9 would be dangling if this line were still part of the list',
   '',
@@ -1124,7 +1125,7 @@ const LINT_FIXTURE = [
   '**Reinforced (2026-09-02)**: again',
   '- a bullet after the list ended is not a relation',
   '',
-  '## 12. Untagged — raises the entry range so #9 is a dangling reference, #640 is not',
+  '## 12. Untagged',
   ''
 ].join('\n');
 
@@ -1137,11 +1138,11 @@ test('lint reports Type outside the six, compound Domain, Related lines without 
 
   assert.deepEqual(lint.type_off_vocabulary, [{ number: 2, type: 'Heuristic' }]);
   assert.deepEqual(lint.compound_domain, [{ number: 2, domain: 'Process/Strategy' }]);
-  assert.deepEqual(lint.related_dangling, [{ number: 1, ref: 9 }], 'only the #9 inside the list, not the one after the Reinforced bullet');
+  assert.deepEqual(lint.related_dangling, [{ number: 1, ref: 9 }, { number: 1, ref: 640 }], 'unresolved #N are dangling whatever their size; not the #9 after the Reinforced bullet');
   assert.deepEqual(lint.related_without_number.map(x => [x.number, x.located]), [[1, null], [1, 2], [1, null]]);
-  assert.match(lint.related_without_number[2].text, /Issue #1 and PR #2/, 'ticket refs do not make a line "numbered"; #640 is above the entry range');
+  assert.match(lint.related_without_number[2].text, /Issue #1 and PR #2/, 'ticket refs with their word do not make a line "numbered"');
   assert.deepEqual(lint.summary, {
-    type_off_vocabulary: 1, compound_domain: 1, related_lines: 6, related_without_number: 3, related_located: 1, related_dangling: 1
+    type_off_vocabulary: 1, compound_domain: 1, related_lines: 7, related_without_number: 3, related_located: 1, related_dangling: 2
   });
   assert.equal(fs.statSync(patternsFile).mtimeMs, before, 'lint is read-only');
   assert.equal(fs.readFileSync(patternsFile, 'utf8'), LINT_FIXTURE);
@@ -1188,4 +1189,39 @@ test('negative control: each lint class can fail — one mutation per class flip
     const summary = lintPatternEntries(parsePatternEntries(text)).summary;
     assert.ok(summary[key] > 0, `${key} must be caught: ${JSON.stringify(summary)}`);
   }
+});
+
+test('lint: review boundaries — small file dangling, ambiguous titles, exact short title, wrapped bullet, "Data & Metrics"', async () => {
+  const { lintPatternEntries, parsePatternEntries } = await import('../scripts/lib.js');
+  const lint = text => lintPatternEntries(parsePatternEntries(text));
+
+  // Only #1/#2 exist: "#99" is dangling, not a ticket, whatever its size (jinglever, review of fa983d7).
+  const small = lint('## 1. One\n`[Domain: Process | Type: Temporal]`\n\n**Related patterns**:\n- #99 (Missing target) — related\n- Pattern #98 — also missing\n\n## 2. Two\n`[Domain: People | Type: Delegation]`\n');
+  assert.deepEqual(small.related_dangling, [{ number: 1, ref: 99 }, { number: 1, ref: 98 }]);
+  assert.equal(small.summary.related_without_number, 0);
+
+  // Two titles share the prefix before the dash: a line naming the full second title locates #3, a line naming only the prefix locates nothing.
+  const amb = lint([
+    '## 1. Origin', '`[Domain: Process | Type: Temporal]`', '', '**Related patterns**:',
+    '- Shared principle — Second case — names the third entry in full',
+    '- Shared principle — the prefix alone is ambiguous',
+    '- 机制优先 — an exact short title locates the fourth entry',
+    '- Data & Metrics is one Domain, not two',
+    '', '## 2. Shared principle — First case', '`[Domain: Process | Type: Constraint]`', '',
+    '## 3. Shared principle — Second case', '`[Domain: Process | Type: Constraint]`', '',
+    '## 4. 机制优先', '`[Domain: Data & Metrics | Type: Constraint]`', ''
+  ].join('\n'));
+  assert.deepEqual(amb.related_without_number.map(x => x.located), [3, null, 4, null]);
+  assert.deepEqual(amb.compound_domain, [], '"Data & Metrics" is a legal Domain (methodology example)');
+  assert.equal(amb.summary.related_located, 2);
+
+  // A wrapped bullet continues its item; the bullets after it are still read.
+  const wrapped = lint('## 1. One\n`[Domain: Process | Type: Temporal]`\n\n**Related patterns**:\n- #2 (Two) — a long line that\n  wraps onto a second line\n- #3 (Three) — still part of the list\n- Four — no number\n\n**Reinforced (2026-09-01)**: ends it\n- not a relation\n\n## 2. Two\n`[Domain: Process | Type: Temporal]`\n\n## 3. Three\n`[Domain: Process | Type: Temporal]`\n');
+  assert.equal(wrapped.summary.related_lines, 3);
+  assert.deepEqual(wrapped.related_dangling, []);
+  assert.deepEqual(wrapped.related_without_number.map(x => x.text), ['Four — no number']);
+
+  // Negative control for the wrap rule: a bold label ends the list even mid-way.
+  const ended = lint('## 1. One\n`[Domain: Process | Type: Temporal]`\n\n**Related patterns**:\n- #5 dangling\n**Reinforced (2026-09-01)**: x\n- #6 not read\n');
+  assert.deepEqual(ended.related_dangling, [{ number: 1, ref: 5 }]);
 });

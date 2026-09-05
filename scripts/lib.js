@@ -401,6 +401,12 @@ export function parsePatternEntries(text) {
       // A "- **Reinforced (...)**" bullet is a Reinforced block, not a relation: it ends the list.
       if (item && !REINFORCED.test(item[1])) { current.related.push(item[1]); continue; }
       if (line.trim() === '') continue;
+      // A wrapped bullet continues the previous item; a bold label, a
+      // separator or a heading ends the list.
+      if (!item && !/^(\*\*|---|#)/.test(line) && current.related.length > 0) {
+        current.related[current.related.length - 1] += ` ${line.trim()}`;
+        continue;
+      }
       inRelated = false;
     }
     const tag = line.match(TAG);
@@ -416,10 +422,23 @@ export function parsePatternEntries(text) {
   return entries;
 }
 
-// Title key for locating a number-less "Related patterns" line: the title up
-// to its first dash/em-dash separator, lower-cased. Short keys are not matched.
-function titleKey(title) {
-  return String(title).split(/\s[—–-]\s|—/)[0].trim().toLowerCase();
+// Locating a number-less "Related patterns" line among entry titles: the full
+// title (case-insensitive) wins; otherwise the title's prefix before its first
+// dash/em-dash separator, but only when that prefix is at least 8 characters
+// and belongs to exactly one entry. Anything ambiguous locates nothing.
+function titleLocator(entries) {
+  const full = entries.map(e => ({ number: e.number, key: String(e.title).trim().toLowerCase() })).filter(k => k.key.length >= 2);
+  const prefixCounts = new Map();
+  const prefixes = entries.map(e => ({ number: e.number, key: String(e.title).split(/\s[—–-]\s|—/)[0].trim().toLowerCase() })).filter(k => k.key.length >= 8);
+  for (const k of prefixes) prefixCounts.set(k.key, (prefixCounts.get(k.key) || 0) + 1);
+  return (text, self) => {
+    const lower = text.toLowerCase();
+    const exact = full.filter(k => k.number !== self && lower.includes(k.key));
+    if (exact.length === 1) return exact[0].number;
+    if (exact.length > 1) return null;
+    const byPrefix = prefixes.filter(k => k.number !== self && prefixCounts.get(k.key) === 1 && lower.includes(k.key));
+    return byPrefix.length === 1 ? byPrefix[0].number : null;
+  };
 }
 
 // Read-only drift report against the methodology: Type outside the fixed six,
@@ -428,8 +447,7 @@ function titleKey(title) {
 // nothing here changes the file.
 export function lintPatternEntries(entries) {
   const numbers = new Set(entries.map(e => e.number));
-  const maxNumber = entries.reduce((max, e) => Math.max(max, e.number), 0);
-  const keys = entries.map(e => ({ number: e.number, key: titleKey(e.title) })).filter(k => k.key.length >= 8);
+  const locate = titleLocator(entries);
   const typeOff = [];
   const compound = [];
   const withoutNumber = [];
@@ -437,16 +455,17 @@ export function lintPatternEntries(entries) {
   let relatedLines = 0;
   for (const e of entries) {
     if (e.type !== null && !PATTERN_TYPES.includes(e.type)) typeOff.push({ number: e.number, type: e.type });
-    if (e.domain !== null && /[/,&]/.test(e.domain)) compound.push({ number: e.number, domain: e.domain });
+    // Only "/" marks a compound Domain: "Data & Metrics" is one Domain (methodology example).
+    if (e.domain !== null && e.domain.includes('/')) compound.push({ number: e.number, domain: e.domain });
     for (const text of e.related) {
       relatedLines += 1;
-      // "Issue #687" / "PR #12" name tickets, and so does any #N above the
-      // highest entry number; only a bare #N inside the entry range is a reference.
-      const refs = [...text.replace(ISSUE_REF, '').matchAll(/#(\d+)/g)].map(m => Number(m[1])).filter(n => n <= maxNumber);
+      // "Issue #687" / "PR #12" name tickets and are not references. Every other
+      // #N is taken as an entry reference; one that resolves to no entry is
+      // dangling — a bare ticket number written without its word is reported
+      // too, and the owner rewrites the line to say what it is.
+      const refs = [...text.replace(ISSUE_REF, '').matchAll(/#(\d+)/g)].map(m => Number(m[1]));
       if (refs.length === 0) {
-        const lower = text.toLowerCase();
-        const hit = keys.find(k => k.number !== e.number && lower.includes(k.key));
-        withoutNumber.push({ number: e.number, text: text.length > 120 ? `${text.slice(0, 117)}...` : text, located: hit ? hit.number : null });
+        withoutNumber.push({ number: e.number, text: text.length > 120 ? `${text.slice(0, 117)}...` : text, located: locate(text, e.number) });
       } else {
         for (const ref of refs) if (!numbers.has(ref)) dangling.push({ number: e.number, ref });
       }
