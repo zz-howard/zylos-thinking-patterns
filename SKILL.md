@@ -22,20 +22,12 @@ upgrade:
   repo: zz-howard/zylos-thinking-patterns
   branch: main
 
-config:
-  optional:
-    - name: THINKING_PATTERNS_MIN_CONVERSATIONS
-      description: Minimum in-scope conversations inside the lookback window before an extraction run analyzes anything; a window below it is skipped; a skip triggers no catch-up read, later runs take their own windows, so messages outside every later window are never read. Stored in component config.json as min_conversations.
-      default: "4"
-
 dependencies:
   - comm-bridge
   - scheduler
 ---
 
 # Thinking Patterns
-
-Use this skill when a scheduled `thinking-patterns` task arrives, when the owner explicitly asks to run thinking-pattern extraction, or when the owner wants to set up or change the extraction policy or its schedule.
 
 The component mines conversations for decision moments and distills the ones that generalize into numbered pattern entries. The methodology is fixed and ships with the component (`references/methodology.md`). What is extracted, from where, into which file, how candidates are confirmed, and **when and how far back each run looks** are the **owner's** decisions, all written in one policy file. The script fetches a time window, applies the policy's channel filter and keeps run state; it never writes patterns. Judgment belongs to the agent.
 
@@ -88,7 +80,13 @@ Outer layer, in the main session:
    ```bash
    node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js fetch --lookback 24h --task daily [--policy <name>]
    ```
-2. Parse the JSON output. `window` is the time range that was fetched — `begin` / `end` are rendered in the owner's time zone (`window.time_zone`, the `TZ` from the zylos `.env`) with the UTC offset spelled out, e.g. `2026-09-05 19:20:14 +08:00`; every message timestamp in `conversations` uses the same form, so dates in a source-event line follow the owner's day, not UTC; `count` is the number of messages after the policy's channel filter; `filters` echoes the include/exclude lists that were applied and `filtered_out` how many in-window messages they removed; `truncated: true` means the transcript is not the whole window: with `window_complete: true` it means the window held more in-scope messages (after the channel filter) than `max_conversations` and the oldest `truncated_out` of them were left out (mention both in the summary); with `window_complete: false` it means the read itself stopped short (below). `window_complete: false` means the read stopped at `max_page_bytes` before reaching the start of the window: the transcript holds only the newest rows, `filtered_out` counts only what was read and `truncated_out` is `null` — say so in the summary and relay the situation to the owner (raise `max_page_bytes`, shorten the lookback or lower `max_conversations`). `patterns` summarizes the target file: `next_number`, `entry_count`, the current `domains` / `types` distribution, and `entries` — an index of every existing entry (`number`, `title`, `domain`, `type`, `reinforced` count). `policy_placeholders` lists the policy sections that still contain the template's `(fill in` marker.
+2. Parse the JSON output. Every field is documented in `references/fetch-output.md` (read it when a field is unclear). What the workflow depends on:
+   - `window.begin` / `window.end` and every transcript timestamp are in the owner's time zone with the UTC offset spelled out (`2026-09-05 19:20:14 +08:00`), so dates in a source-event line follow the owner's day, not UTC. Pass `window.end` back to `commit`.
+   - `count` is the number of messages after the policy's channel filter; `filters` / `filtered_out` echo what the filter removed.
+   - `truncated: true` with `window_complete: true`: the window held more in-scope messages than `max_conversations`; the oldest `truncated_out` were left out — mention both numbers in the run summary.
+   - `window_complete: false`: the read stopped at `max_page_bytes` before reaching the start of the window; the transcript holds only the newest rows and `truncated_out` is `null` — say so in the summary and relay the situation to the owner (raise `max_page_bytes`, shorten the lookback or lower `max_conversations`).
+   - `patterns`: `patterns_file`, `next_number`, `entry_count`, the `domains` / `types` distribution, and `entries` — the index of existing entries (`number`, `title`, `domain`, `type`, `reinforced`).
+   - `policy_placeholders`: policy sections still holding the template's `(fill in` marker.
 3. If `status` is `skip` (pass the same `--policy` if one was given) — `reason` is `disabled`, `unconfigured`, `below_threshold` (the window really held too few in-scope messages) or `incomplete_read` (the part of the window that fit under `max_page_bytes` held too few; the rest is unread, so this is not a quiet window — relay `owner_action` to the owner):
    ```bash
    node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js commit --result skip --task daily --lookback 24h --window-end "<window.end>"

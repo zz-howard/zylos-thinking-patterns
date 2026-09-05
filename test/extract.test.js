@@ -4,8 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(import.meta.dirname, '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXTRACT = path.join(ROOT, 'scripts/extract.js');
 const POST_INSTALL = path.join(ROOT, 'hooks/post-install.js');
 const POST_UPGRADE = path.join(ROOT, 'hooks/post-upgrade.js');
@@ -980,5 +981,116 @@ test('parseDuration positive and negative controls', async () => {
   assert.equal(parseDuration(' 2D '), 2 * 86_400_000);
   for (const bad of ['', '24', 'h', '1w', '0d', '-1h', 24]) {
     assert.throws(() => parseDuration(bad), /Invalid lookback/, `should reject ${JSON.stringify(bad)}`);
+  }
+});
+
+test('hooks are idempotent: an up-to-date config and state are not rewritten, even with reordered keys', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  const env = { ZYLOS_DATA_DIR: dataDir, ZYLOS_DIR: dir };
+  runNode(POST_INSTALL, [], env);
+  const configPath = path.join(dataDir, 'config.json');
+  const statePath = path.join(dataDir, 'state.json');
+  // Owner edits a value and rewrites the file with a different key order and formatting.
+  const installed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const reordered = Object.fromEntries(Object.entries({ ...installed, min_conversations: 9 }).reverse());
+  fs.writeFileSync(configPath, JSON.stringify(reordered));
+  const configBytes = fs.readFileSync(configPath, 'utf8');
+  const stateBytes = fs.readFileSync(statePath, 'utf8');
+  const configMtime = fs.statSync(configPath).mtimeMs;
+  const stateMtime = fs.statSync(statePath).mtimeMs;
+
+  const upgrade = runNode(POST_UPGRADE, [], env);
+  const install = runNode(POST_INSTALL, [], env);
+
+  assert.match(upgrade, /config\.json: up to date/);
+  assert.match(upgrade, /state\.json: up to date/);
+  assert.match(install, /Config exists; up to date/);
+  assert.match(install, /State exists; up to date/);
+  assert.equal(fs.readFileSync(configPath, 'utf8'), configBytes, 'config.json bytes must be untouched');
+  assert.equal(fs.readFileSync(statePath, 'utf8'), stateBytes, 'state.json bytes must be untouched');
+  assert.equal(fs.statSync(configPath).mtimeMs, configMtime);
+  assert.equal(fs.statSync(statePath).mtimeMs, stateMtime);
+  assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).min_conversations, 9);
+});
+
+test('negative control: post-upgrade does write when a default key is missing (the idempotency guard can fail)', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  const env = { ZYLOS_DATA_DIR: dataDir, ZYLOS_DIR: dir };
+  runNode(POST_INSTALL, [], env);
+  const configPath = path.join(dataDir, 'config.json');
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  delete config.default_lookback;
+  config.min_conversations = 9;
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  const before = fs.readFileSync(configPath, 'utf8');
+
+  const upgrade = runNode(POST_UPGRADE, [], env);
+  const after = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+  assert.match(upgrade, /config\.json: added missing default fields/);
+  assert.notEqual(fs.readFileSync(configPath, 'utf8'), before);
+  assert.equal(after.default_lookback, '24h', 'missing default restored');
+  assert.equal(after.min_conversations, 9, 'owner value preserved');
+});
+
+test('printed install paths follow ZYLOS_DIR and default to ~/zylos', () => {
+  const custom = runNode(EXTRACT, ['template', '--lookback', '24h', '--task', 'daily', '--cron', '0 1 * * *'], { ZYLOS_DIR: '/opt/zy' });
+  assert.match(custom, /\/opt\/zy\/\.claude\/skills\/thinking-patterns\/SKILL\.md/);
+  assert.match(custom, /\/opt\/zy\/\.claude\/skills\/scheduler\/scripts\/cli\.js/);
+  assert.doesNotMatch(custom, /~\/zylos\//);
+
+  const standard = runNode(EXTRACT, ['template', '--lookback', '24h', '--task', 'daily', '--cron', '0 1 * * *'], { ZYLOS_DIR: '' });
+  assert.match(standard, /~\/zylos\/\.claude\/skills\/thinking-patterns\/SKILL\.md/);
+  assert.match(standard, /~\/zylos\/\.claude\/skills\/scheduler\/scripts\/cli\.js/);
+});
+
+// --- Review finding on c96a048 (jinglever, 2026-09-05): installed paths in shell commands ---
+
+// Runs both printed commands through a real bash with ZYLOS_DIR set to a
+// directory whose name holds a space and a single quote: the registration
+// line, and then the fetch command quoted inside the prompt the scheduler
+// received. Fake scheduler / extract.js at the installed paths only record
+// argv. The default `~/zylos` must stay bare so HOME expansion still happens.
+function runInstalledCommands(zylosDir, home) {
+  const text = runNode(EXTRACT, ['template', '--lookback', '7d', '--task', 'weekly', '--cron', '0 22 * * 0'], { ZYLOS_DIR: zylosDir });
+  const line = text.split('\n').find(l => l.startsWith('node ') && /scheduler\/scripts\/cli\.js'? add /.test(l));
+  assert.ok(line, 'template prints a registration line');
+  const installed = zylosDir === '' ? path.join(home, 'zylos') : zylosDir;
+  const skills = path.join(installed, '.claude/skills');
+  const schedulerArgv = path.join(home, 'scheduler-argv.json');
+  const fetchArgv = path.join(home, 'fetch-argv.json');
+  fs.mkdirSync(path.join(skills, 'scheduler/scripts'), { recursive: true });
+  fs.mkdirSync(path.join(skills, 'thinking-patterns/scripts'), { recursive: true });
+  fs.writeFileSync(path.join(installed, 'package.json'), '{"type":"module"}\n');
+  fs.writeFileSync(path.join(skills, 'scheduler/scripts/cli.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(schedulerArgv)}, JSON.stringify(process.argv.slice(2)));\n`);
+  fs.writeFileSync(path.join(skills, 'thinking-patterns/scripts/extract.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(fetchArgv)}, JSON.stringify(process.argv.slice(2)));\n`);
+  const env = { ...process.env, HOME: home };
+  execFileSync('bash', ['-c', line], { env, encoding: 'utf8' });
+  const argv = JSON.parse(fs.readFileSync(schedulerArgv, 'utf8'));
+  const fetchCommand = argv[1].match(/`(node [^`]*extract\.js'? fetch[^`]*)`/);
+  assert.ok(fetchCommand, 'prompt carries the fetch command in backticks');
+  execFileSync('bash', ['-c', fetchCommand[1]], { env, encoding: 'utf8' });
+  return { argv, fetchArgv: JSON.parse(fs.readFileSync(fetchArgv, 'utf8')) };
+}
+
+test('printed commands run when ZYLOS_DIR holds a space and a single quote, and with the ~/zylos default', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'thinking-patterns-quote-'));
+  const cases = [
+    { name: 'default', zylosDir: '' },
+    { name: 'plain', zylosDir: path.join(root, 'plain/zylos') },
+    { name: 'space', zylosDir: path.join(root, 'zylos space') },
+    { name: 'quote', zylosDir: path.join(root, "it's a dir/zylos") }
+  ];
+  for (const c of cases) {
+    const home = path.join(root, `home-${c.name}`);
+    fs.mkdirSync(home, { recursive: true });
+    const { argv, fetchArgv } = runInstalledCommands(c.zylosDir, home);
+    assert.equal(argv[0], 'add', c.name);
+    assert.deepEqual(argv.slice(2), ['--cron', '0 22 * * 0', '--priority', '3', '--name', 'thinking-patterns-weekly'], c.name);
+    assert.deepEqual(fetchArgv, ['fetch', '--lookback', '7d', '--task', 'weekly'], c.name);
+    const expected = JSON.parse(runNode(EXTRACT, ['template', '--json', '--lookback', '7d', '--task', 'weekly', '--cron', '0 22 * * 0'], { ZYLOS_DIR: c.zylosDir })).scheduler_prompt;
+    assert.equal(argv[1], expected, `${c.name}: prompt byte-for-byte`);
   }
 });

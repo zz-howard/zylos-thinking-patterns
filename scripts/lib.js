@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const HOME = os.homedir();
 export const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(HOME, 'zylos');
@@ -10,11 +11,15 @@ export const POLICY_PATH = path.join(DATA_DIR, 'policy.md');
 export const STATE_PATH = path.join(DATA_DIR, 'state.json');
 export const LOG_DIR = path.join(DATA_DIR, 'logs');
 export const RUN_LOG_PATH = path.join(LOG_DIR, 'runs.jsonl');
-export const SKILL_DIR = path.resolve(import.meta.dirname, '..');
+export const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const METHODOLOGY_PATH = path.join(SKILL_DIR, 'references/methodology.md');
-export const SKILL_MD_INSTALLED = '~/zylos/.claude/skills/thinking-patterns/SKILL.md';
-export const EXTRACT_INSTALLED = '~/zylos/.claude/skills/thinking-patterns/scripts/extract.js';
-export const SCHEDULER_CLI_INSTALLED = '~/zylos/.claude/skills/scheduler/scripts/cli.js';
+// Paths as they are printed into templates and the default config. `~/zylos` is
+// the platform convention; a non-default ZYLOS_DIR is honoured here as well as
+// for the data directory above.
+const ZYLOS_DIR_DISPLAY = process.env.ZYLOS_DIR || '~/zylos';
+export const SKILL_MD_INSTALLED = `${ZYLOS_DIR_DISPLAY}/.claude/skills/thinking-patterns/SKILL.md`;
+export const EXTRACT_INSTALLED = `${ZYLOS_DIR_DISPLAY}/.claude/skills/thinking-patterns/scripts/extract.js`;
+export const SCHEDULER_CLI_INSTALLED = `${ZYLOS_DIR_DISPLAY}/.claude/skills/scheduler/scripts/cli.js`;
 export const TASK_NAME_PREFIX = 'thinking-patterns';
 export const DEFAULT_TASK = 'default';
 
@@ -27,7 +32,7 @@ export const DEFAULT_CONFIG = {
   max_conversations: 300,
   max_page_bytes: 64 * 1024 * 1024,
   default_lookback: '24h',
-  c4_db_cli: '~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js'
+  c4_db_cli: `${ZYLOS_DIR_DISPLAY}/.claude/skills/comm-bridge/scripts/c4-db.js`
 };
 
 // Channels that never carry the subject's judgment: scheduler/system notices
@@ -234,13 +239,21 @@ export function normalizeTaskName(value) {
 export function schedulerPrompt(lookback = DEFAULT_CONFIG.default_lookback, task = DEFAULT_TASK, policy = DEFAULT_POLICY) {
   const policyArg = policy === DEFAULT_POLICY ? '' : ` --policy ${policy}`;
   const policyNote = policy === DEFAULT_POLICY ? '' : `, policy "${policy}"`;
-  return `Run the thinking-patterns skill (task "${task}", lookback ${lookback}${policyNote}). Load and follow ${SKILL_MD_INSTALLED}. Use its required background-subagent execution model; the subagent's fetch step is \`node ${EXTRACT_INSTALLED} fetch --lookback ${lookback} --task ${task}${policyArg}\`, and every commit step must pass \`--task ${task}${policyArg}\`. The main session only orchestrates and marks the scheduler task done after the subagent completes.`;
+  return `Run the thinking-patterns skill (task "${task}", lookback ${lookback}${policyNote}). Load and follow ${SKILL_MD_INSTALLED}. Use its required background-subagent execution model; the subagent's fetch step is \`node ${shellPath(EXTRACT_INSTALLED)} fetch --lookback ${lookback} --task ${task}${policyArg}\`, and every commit step must pass \`--task ${task}${policyArg}\`. The main session only orchestrates and marks the scheduler task done after the subagent completes.`;
 }
 
 // POSIX single-quoting: the prompt is data, never shell syntax. Backticks,
 // "$", and double quotes inside it must reach the scheduler byte-for-byte.
 export function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+// An installed path as one shell argument. Plain path characters stay bare so
+// the default `~/zylos` still expands at the owner's shell; anything else
+// (a ZYLOS_DIR with spaces or quotes) is single-quoted. Display strings in
+// prose are not shell arguments and keep the bare form.
+export function shellPath(value) {
+  return /^[A-Za-z0-9_./~-]+$/.test(value) ? value : shellQuote(value);
 }
 
 export function schedulerTaskName(task = DEFAULT_TASK, policy = DEFAULT_POLICY) {
@@ -262,11 +275,11 @@ export function schedulerTemplate(lookback = DEFAULT_CONFIG.default_lookback, ta
     '',
     'Then register the task once (values below are examples):',
     '',
-    `node ${SCHEDULER_CLI_INSTALLED} add ${shellQuote(prompt)} --cron ${shellQuote(cron)} --priority 3 --name ${schedulerTaskName(task, policy)}`,
+    `node ${shellPath(SCHEDULER_CLI_INSTALLED)} add ${shellQuote(prompt)} --cron ${shellQuote(cron)} --priority 3 --name ${schedulerTaskName(task, policy)}`,
     '',
     'Print a template for other values with:',
     '',
-    `node ${EXTRACT_INSTALLED} template --lookback 7d --task weekly --cron "0 22 * * 0" [--policy <name>]`,
+    `node ${shellPath(EXTRACT_INSTALLED)} template --lookback 7d --task weekly --cron "0 22 * * 0" [--policy <name>]`,
     '',
     'Task description (used verbatim above):',
     '',
@@ -301,6 +314,26 @@ export function atomicWriteJson(filePath, value) {
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmpPath, payload);
   fs.renameSync(tmpPath, filePath);
+}
+
+// Deterministic serialization (sorted keys, recursively) so two JSON files that
+// hold the same values compare equal regardless of key order or formatting.
+export function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+// Write only when the content differs from what is on disk: hooks that merge
+// defaults stay idempotent instead of rewriting owner files on every run.
+// Returns true when the file was written.
+export function writeJsonIfChanged(filePath, value) {
+  const current = fs.existsSync(filePath) ? readJson(filePath, {}) : undefined;
+  if (current !== undefined && stableStringify(current) === stableStringify(value)) return false;
+  atomicWriteJson(filePath, value);
+  return true;
 }
 
 export function writeIfMissing(filePath, content) {
