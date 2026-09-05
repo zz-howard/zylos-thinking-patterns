@@ -327,13 +327,30 @@ export function atomicWriteJson(filePath, value) {
 
 // Atomic replacement of an owner-authored text file: write a sibling temp file
 // (deterministic name, single writer) and rename it over the original, so an
-// interrupted write leaves the original bytes untouched. Throws on failure and
-// removes the temp file when it can.
+// interrupted write leaves the original bytes untouched. The temp file is
+// created fresh (a stale one is removed, never reused) with the original's
+// permission bits applied before any content is written, so an owner's 0600
+// survives the swap and the full text is never briefly world-readable. Throws
+// on failure and removes the temp file when it can.
 export function atomicWriteText(filePath, text) {
   ensureDir(path.dirname(filePath));
   const tmpPath = `${filePath}.tmp`;
+  let mode = null;
   try {
-    fs.writeFileSync(tmpPath, text);
+    mode = fs.statSync(filePath).mode & 0o777;
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  try {
+    fs.rmSync(tmpPath, { force: true });
+    const fd = fs.openSync(tmpPath, 'wx', mode ?? 0o644);
+    try {
+      if (mode !== null) fs.fchmodSync(fd, mode); // exact bits, independent of umask
+      fs.writeFileSync(fd, text);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tmpPath, filePath);
   } catch (err) {
     try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }

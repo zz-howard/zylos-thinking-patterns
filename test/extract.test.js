@@ -943,6 +943,57 @@ test('post-upgrade leaves policy.md byte-identical and keeps config patterns_fil
   assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).patterns_file, undefined);
 });
 
+test('post-upgrade keeps a 0600 policy.md at 0600 through the atomic migration', () => {
+  const { dir, dataDir, env } = setup(makeRows([10]));
+  const target = path.join(dir, 'legacy-patterns.md');
+  writeConfig(dataDir, { patterns_file: target });
+  const policyPath = path.join(dataDir, 'policy.md');
+  fs.writeFileSync(policyPath, '# Policy\n\nSubject: the owner\nNotification: telegram 123\n');
+  fs.chmodSync(policyPath, 0o600);
+  // A stale temp file with wide permissions must not be reused.
+  fs.writeFileSync(`${policyPath}.tmp`, 'stale');
+  fs.chmodSync(`${policyPath}.tmp`, 0o666);
+
+  const output = runNode(POST_UPGRADE, [], env);
+
+  assert.match(output, /Moved patterns_file/);
+  assert.equal(fs.statSync(policyPath).mode & 0o777, 0o600, 'owner mode preserved');
+  assert.equal(fs.existsSync(`${policyPath}.tmp`), false);
+  assert.match(fs.readFileSync(policyPath, 'utf8'), /^Patterns file: /m);
+  assert.equal(JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.patterns_file, target);
+});
+
+test('atomicWriteText applies the original mode before writing, independent of umask', async () => {
+  const { atomicWriteText } = await import('../scripts/lib.js');
+  const dir = tmpDir();
+  const file = path.join(dir, 'owner.md');
+  fs.writeFileSync(file, 'v1\n');
+  fs.chmodSync(file, 0o600);
+  const before = fs.statSync(file).ino;
+
+  atomicWriteText(file, 'v2\n');
+
+  // The final file is the renamed temp file (new inode), and its bits were set
+  // before content was written, so the temp stage never exposed the text wider.
+  assert.notEqual(fs.statSync(file).ino, before);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'v2\n');
+
+  fs.chmodSync(file, 0o640);
+  atomicWriteText(file, 'v3\n');
+  assert.equal(fs.statSync(file).mode & 0o777, 0o640);
+
+  // A stale temp that is a symlink must not be written through: the temp is
+  // recreated exclusively, never reused.
+  const decoy = path.join(dir, 'decoy.txt');
+  fs.writeFileSync(decoy, 'decoy\n');
+  fs.symlinkSync(decoy, `${file}.tmp`);
+  atomicWriteText(file, 'v4\n');
+  assert.equal(fs.readFileSync(decoy, 'utf8'), 'decoy\n', 'symlink target untouched');
+  assert.equal(fs.readFileSync(file, 'utf8'), 'v4\n');
+  assert.equal(fs.lstatSync(file).isSymbolicLink(), false);
+});
+
 test('atomicWriteText replaces via sibling temp + rename and cleans up on failure', async () => {
   const { atomicWriteText } = await import('../scripts/lib.js');
   const dir = tmpDir();
