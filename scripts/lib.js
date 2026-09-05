@@ -402,15 +402,37 @@ export function parseC4Timestamp(value) {
   return ms;
 }
 
-export function formatC4Timestamp(ms) {
-  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+// The owner's time zone: TZ from the zylos .env (inherited by every process the
+// agent runs), else the system zone.
+export function localTimeZone() {
+  return process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+// "YYYY-MM-DD HH:MM:SS +08:00": wall-clock time in the owner's zone with the
+// UTC offset always spelled out, so no reader has to guess which zone a time
+// belongs to. Comparisons never use this form; they stay in epoch ms.
+export function formatLocalTimestamp(ms, timeZone = localTimeZone()) {
+  let formatter;
+  try {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'longOffset'
+    });
+  } catch {
+    throw new Error(`Invalid time zone: ${timeZone}`);
+  }
+  const p = Object.fromEntries(formatter.formatToParts(new Date(ms)).map(part => [part.type, part.value]));
+  const offset = p.timeZoneName === 'GMT' ? '+00:00' : p.timeZoneName.replace('GMT', '');
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second} ${offset}`;
 }
 
 // Transcript in the same shape c4-fetch.js prints, built directly from rows.
+// Rows carry `_ms` (epoch) from the fetch; timestamps are printed in the
+// owner's zone with the offset, never as the zone-less UTC string C4 stores.
 export function formatTranscript(rows, window) {
-  const lines = [`[Conversations] (window ${window.begin} ~ ${window.end} UTC, lookback ${window.lookback}, ${rows.length} messages)`];
+  const lines = [`[Conversations] (window ${window.begin} ~ ${window.end}, time zone ${window.time_zone}, lookback ${window.lookback}, ${rows.length} messages)`];
   for (const row of rows) {
-    lines.push(`[${row.timestamp}] ${String(row.direction).toUpperCase()} (${row.channel}:${row.endpoint_id ?? ''}):`);
+    lines.push(`[${formatLocalTimestamp(row._ms, window.time_zone)}] ${String(row.direction).toUpperCase()} (${row.channel}:${row.endpoint_id ?? ''}):`);
     lines.push(String(row.content ?? ''));
     lines.push('');
   }

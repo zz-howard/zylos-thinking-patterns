@@ -8,8 +8,8 @@ import fs from 'node:fs';
 import {
   CONFIG_PATH, STATE_PATH, LOG_DIR, RUN_LOG_PATH, METHODOLOGY_PATH,
   DEFAULT_CONFIG, SCHEDULE_QUESTIONS, POLICY_TEMPLATE,
-  atomicWriteJson, ensureDir, expandHome, formatC4Timestamp, formatTranscript, inspectPatternsFile,
-  loadConfig, loadState, normalizePolicyName, normalizeTaskName, parseC4Timestamp, parseDuration, readPolicy, run,
+  atomicWriteJson, ensureDir, expandHome, formatLocalTimestamp, formatTranscript, inspectPatternsFile,
+  loadConfig, loadState, localTimeZone, normalizePolicyName, normalizeTaskName, parseC4Timestamp, parseDuration, readPolicy, run,
   schedulerPrompt, schedulerTaskName, schedulerTemplate
 } from './lib.js';
 
@@ -106,7 +106,10 @@ function commandFetch(args) {
 
   const endMs = Date.now();
   const beginMs = endMs - lookbackMs;
-  const window = { begin: formatC4Timestamp(beginMs), end: formatC4Timestamp(endMs), lookback: lookbackText };
+  // Window bounds are computed in epoch ms and only rendered in the owner's
+  // zone (with offset); C4's own UTC strings never reach the agent.
+  const timeZone = localTimeZone();
+  const window = { begin: formatLocalTimestamp(beginMs, timeZone), end: formatLocalTimestamp(endMs, timeZone), time_zone: timeZone, lookback: lookbackText };
   const base = {
     task,
     window,
@@ -156,7 +159,7 @@ function commandFetch(args) {
   outputJson({
     status: 'ready',
     ...envelope,
-    conversations: formatTranscript(rows.map(({ _ms, ...row }) => row), window)
+    conversations: formatTranscript(rows, window)
   });
 }
 
@@ -257,7 +260,7 @@ function main() {
     if (command === 'template') commandTemplate(args);
     outputJson({
       status: 'error',
-      error: 'Usage: extract.js fetch [--lookback 24h] [--task name] [--policy name] | commit --result <skip|no_change|updated> [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS"] | inspect [--policy name] | status [--policy name] | template [--policy | --policy name] [--lookback 24h] [--task name] [--cron "50 23 * * *"] [--json]'
+      error: 'Usage: extract.js fetch [--lookback 24h] [--task name] [--policy name] | commit --result <skip|no_change|updated> [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS +HH:MM"] | inspect [--policy name] | status [--policy name] | template [--policy | --policy name] [--lookback 24h] [--task name] [--cron "50 23 * * *"] [--json]'
     }, 1);
   } catch (err) {
     outputError(err.message);

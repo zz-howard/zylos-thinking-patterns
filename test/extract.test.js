@@ -128,8 +128,8 @@ test('fetch returns ready envelope with transcript at threshold', () => {
   assert.equal(result.count, 2);
   assert.equal(result.min_conversations, 2);
   assert.equal(result.truncated, false);
-  assert.match(result.window.begin, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
-  assert.match(result.conversations, /\[Conversations\] \(window .* UTC, lookback 24h, 2 messages\)/);
+  assert.match(result.window.begin, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}$/);
+  assert.match(result.conversations, /\[Conversations\] \(window .* ~ .*, time zone .*, lookback 24h, 2 messages\)/);
   assert.match(result.conversations, /IN \(telegram:1\):\nmessage 1 \(age 30m\)/);
   assert.match(result.conversations, /OUT \(telegram:1\):\nmessage 2 \(age 10m\)/);
   assert.ok(result.conversations.indexOf('message 1') < result.conversations.indexOf('message 2'), 'oldest first');
@@ -155,6 +155,55 @@ test('fetch writes a large transcript completely through a pipe', () => {
   assert.equal(result.count, 200);
   assert.ok(result.conversations.length > 800_000);
   assert.match(result.conversations, /message 200 \(age 1m\) x{4000}\n/);
+});
+
+test('fetch renders the window and every row in the owner time zone with an explicit offset', () => {
+  // One row 90 minutes old, stored by C4 as a zone-less UTC string.
+  const rows = makeRows([90, 10]);
+  const { env } = setup(rows);
+  const rowUtcMs = Date.parse(`${rows[0].timestamp.replace(' ', 'T')}Z`);
+
+  const tokyo = JSON.parse(runNode(EXTRACT, ['fetch'], { ...env, TZ: 'Asia/Tokyo' }));
+  const utc = JSON.parse(runNode(EXTRACT, ['fetch'], { ...env, TZ: 'UTC' }));
+
+  assert.equal(tokyo.window.time_zone, 'Asia/Tokyo');
+  assert.match(tokyo.window.begin, / \+09:00$/);
+  assert.match(tokyo.window.end, / \+09:00$/);
+  assert.match(tokyo.conversations, /time zone Asia\/Tokyo, lookback 24h/);
+  // The Tokyo wall clock for the row is its UTC instant shifted by 9h.
+  const tokyoWall = new Date(rowUtcMs + 9 * 3_600_000).toISOString().slice(0, 19).replace('T', ' ');
+  assert.match(tokyo.conversations, new RegExp(`\\[${tokyoWall.replace(/[-+.]/g, '\\$&')} \\+09:00\\] IN \\(telegram:1\\):\\nmessage 1 `));
+  // The bare C4 string never reaches the transcript.
+  assert.equal(tokyo.conversations.includes(`[${rows[0].timestamp}]`), false);
+
+  assert.equal(utc.window.time_zone, 'UTC');
+  assert.match(utc.window.end, / \+00:00$/);
+  assert.match(utc.conversations, new RegExp(`\\[${rows[0].timestamp} \\+00:00\\] IN`));
+});
+
+test('the time zone only changes how times are rendered, never which rows are selected', () => {
+  // ages: 30h, 25h, 23h, 1h — a 24h window keeps the last two in every zone.
+  const { env } = setup(makeRows([1800, 1500, 1380, 60]));
+
+  const zones = ['UTC', 'Asia/Singapore', 'America/New_York', 'Pacific/Kiritimati'];
+  const results = zones.map(tz => JSON.parse(runNode(EXTRACT, ['fetch'], { ...env, TZ: tz })));
+
+  for (const result of results) {
+    assert.equal(result.status, 'ready');
+    assert.equal(result.count, 2);
+    assert.match(result.conversations, /message 3 /);
+    assert.match(result.conversations, /message 4 /);
+    assert.doesNotMatch(result.conversations, /message 2 /);
+  }
+  assert.equal(new Set(results.map(r => r.window.time_zone)).size, zones.length);
+});
+
+test('fetch reports an invalid TZ as a JSON error instead of a stack trace', () => {
+  const { env } = setup(makeRows([30, 10]));
+
+  const result = JSON.parse(runNodeFailure(EXTRACT, ['fetch'], { ...env, TZ: 'Mars/Olympus_Mons' }).stdout);
+
+  assert.match(result.error, /Invalid time zone: Mars\/Olympus_Mons/);
 });
 
 test('fetch only includes rows inside the lookback window', () => {
@@ -287,7 +336,7 @@ test('fetch reports unparsable c4-db.js output and bad timestamps as JSON errors
 test('commit records the run, task and window without marking an update', () => {
   const { dataDir, env } = setup(makeRows([10]));
 
-  const result = JSON.parse(runNode(EXTRACT, ['commit', '--result', 'skip', '--task', 'daily', '--lookback', '24h', '--window-end', '2026-09-05 00:00:00'], env));
+  const result = JSON.parse(runNode(EXTRACT, ['commit', '--result', 'skip', '--task', 'daily', '--lookback', '24h', '--window-end', '2026-09-05 00:00:00 +08:00'], env));
   const state = readState(dataDir);
 
   assert.equal(result.status, 'committed');
@@ -295,7 +344,7 @@ test('commit records the run, task and window without marking an update', () => 
   assert.equal(state.schema_version, 2);
   assert.equal(state.last_result, 'skip');
   assert.equal(state.last_update_at, null);
-  assert.deepEqual(state.last_window, { task: 'daily', policy: 'default', lookback: '24h', end: '2026-09-05 00:00:00' });
+  assert.deepEqual(state.last_window, { task: 'daily', policy: 'default', lookback: '24h', end: '2026-09-05 00:00:00 +08:00' });
   const log = fs.readFileSync(path.join(dataDir, 'logs/runs.jsonl'), 'utf8').trim().split('\n');
   assert.equal(log.length, 1);
   assert.equal(JSON.parse(log[0]).result, 'skip');

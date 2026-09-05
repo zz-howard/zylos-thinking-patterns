@@ -88,7 +88,7 @@ Outer layer, in the main session:
    ```bash
    node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js fetch --lookback 24h --task daily [--policy <name>]
    ```
-2. Parse the JSON output. `window` is the UTC time range that was fetched; `count` is the number of messages after the policy's channel filter; `filters` echoes the include/exclude lists that were applied and `filtered_out` how many in-window messages they removed; `truncated: true` means the window held more than `max_conversations` messages and the oldest part was not fetched (mention it in the summary). `patterns` summarizes the target file: `next_number`, `entry_count`, the current `domains` / `types` distribution, and `entries` — an index of every existing entry (`number`, `title`, `domain`, `type`, `reinforced` count). `policy_placeholders` lists the policy sections that still contain the template's `(fill in` marker.
+2. Parse the JSON output. `window` is the time range that was fetched — `begin` / `end` are rendered in the owner's time zone (`window.time_zone`, the `TZ` from the zylos `.env`) with the UTC offset spelled out, e.g. `2026-09-05 19:20:14 +08:00`; every message timestamp in `conversations` uses the same form, so dates in a source-event line follow the owner's day, not UTC; `count` is the number of messages after the policy's channel filter; `filters` echoes the include/exclude lists that were applied and `filtered_out` how many in-window messages they removed; `truncated: true` means the window held more than `max_conversations` messages and the oldest part was not fetched (mention it in the summary). `patterns` summarizes the target file: `next_number`, `entry_count`, the current `domains` / `types` distribution, and `entries` — an index of every existing entry (`number`, `title`, `domain`, `type`, `reinforced` count). `policy_placeholders` lists the policy sections that still contain the template's `(fill in` marker.
 3. If `status` is `skip` (pass the same `--policy` if one was given):
    ```bash
    node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js commit --result skip --task daily --lookback 24h --window-end "<window.end>"
@@ -119,7 +119,7 @@ Outer layer, in the main session:
 
 ```bash
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js fetch [--lookback 24h] [--task name] [--policy name]   # time window → filtered transcript, or skip
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js commit --result skip|no_change|updated [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS"]
+node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js commit --result skip|no_change|updated [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS +HH:MM"]
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js inspect [--policy name]     # policy filters + pattern file: entry count, next number, Domain/Type distribution
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js status [--policy name]      # config + state + policy + patterns
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template [--policy | --policy name] [--lookback 24h] [--task name] [--cron "..."] [--json]

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multiple subjects: `policy-<name>.md` selected with `--policy <name>` on every command; scheduler tasks for it are named `thinking-patterns-<name>[-<task>]`.
 - Policy `## Sources` carries two machine-read lines, `Channels:` and `Exclude channels:` (default exclude `system, void`), applied by `fetch` as a coarse channel filter and echoed back as `filters` / `filtered_out`.
 - `inspect` / `fetch` report the pattern file's Domain and Type distribution and an entry index (`patterns.entries`: number, title, tag, reinforcement count) so the agent screens candidates against the index before reading entries in full.
+- Times the agent reads are in the owner's zone with an explicit offset: `fetch` renders `window.begin` / `window.end` and every transcript timestamp as `YYYY-MM-DD HH:MM:SS +HH:MM` in `TZ` (echoed as `window.time_zone`); C4's zone-less UTC strings are only parsed, never shown. Selection is unchanged (epoch comparison), covered by a multi-zone test.
 - `fetch` / `inspect` / `status` report `policy_placeholders`: policy sections that still contain the template's `(fill in` marker, for the agent to relay to the owner; the run itself proceeds.
 
 ### Fixed
