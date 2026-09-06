@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `patterns.lint.reinforced_off_format`: every line that reads as a reinforcement header but is not the methodology's `**Reinforced (YYYY-MM-DD)**: ` at the line start — bulleted, `Day N` or another qualifier inside the parentheses, `**Reinforced**:` with the date in the text, or the labels `Reinforcing event` / `Reinforcement` — reported as `{number, line}`; `summary.reinforced_off_format` carries the count. Found while normalizing a 166-entry file: 50 such headers in four shapes, some written by the extraction workflow itself. Report only; nothing is changed (#7).
+- `SKILL.md` hard requirement for the Reinforced header shape; `references/methodology.md` states that the header carries the date alone and the block is a paragraph, not a list item (#7).
+
 ## [0.2.0] - 2026-09-05
 
 ### Added
