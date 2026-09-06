@@ -147,6 +147,12 @@ when …") may be recorded on both entries, since a conflict reads the same from
 either side. Every relation line names its target by number; a line with only a
 title is unresolvable once titles change.
 
+**Two kinds of item.** A `Related patterns` list may also hold a *concept item*:
+a principle or idea that has no entry of its own (`Whitelist over blacklist`,
+`Declarative over imperative`). A concept item carries no number because it is
+not a reference. What is never allowed is referring to an entry by its title
+alone; the component's lint reports number-less items that read as references.
+
 Entries are separated by a line containing only `---`.
 
 ## What Never Goes Into the Pattern File

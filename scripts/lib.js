@@ -448,6 +448,12 @@ function titleLocator(entries) {
   };
 }
 
+// A number-less Related item that still reads as a reference to an entry: it opens with a
+// relation verb, or it names an existing entry title (see titleLocator). Everything else
+// under `Related patterns` without a #N is a concept item — a principle or idea with no
+// entry — which the methodology allows and the lint does not report.
+const REFERENCE_LIKE = /^(?:connects?\s+to|see(?:\s+also)?|extends?|cf\.?|relates?\s+to|complements?|counterpart\s+(?:of|to)|inverse\s+of)\b/i;
+
 // Read-only drift report against the methodology: Type outside the fixed six,
 // possible compound Domain (owner check), Related lines with no #N (and whether the name they use can
 // be located among entry titles), #N that resolve to no entry. Reports only —
@@ -461,6 +467,7 @@ export function lintPatternEntries(entries) {
   const dangling = [];
   const reinforcedOff = [];
   let relatedLines = 0;
+  let conceptItems = 0;
   for (const e of entries) {
     // A reinforcement header in any shape but the canonical one: bulleted, `Day N` or another
     // qualifier inside the parentheses, the date in the text, or a different label.
@@ -483,7 +490,11 @@ export function lintPatternEntries(entries) {
       // too, and the owner rewrites the line to say what it is.
       const refs = [...text.replace(ISSUE_REF, '').matchAll(/#(\d+)/g)].map(m => Number(m[1]));
       if (refs.length === 0) {
-        withoutNumber.push({ number: e.number, text: text.length > 120 ? `${text.slice(0, 117)}...` : text, located: locate(text, e.number) });
+        // Reported only when the item reads as an entry reference (relation verb or a located
+        // title); a concept item is legitimate content and is counted, not reported.
+        const located = locate(text, e.number);
+        if (located !== null || REFERENCE_LIKE.test(text)) withoutNumber.push({ number: e.number, text: text.length > 120 ? `${text.slice(0, 117)}...` : text, located });
+        else conceptItems += 1;
       } else {
         for (const ref of refs) if (!numbers.has(ref)) dangling.push({ number: e.number, ref });
       }
@@ -502,7 +513,8 @@ export function lintPatternEntries(entries) {
       related_without_number: withoutNumber.length,
       related_located: withoutNumber.filter(x => x.located !== null).length,
       related_dangling: dangling.length,
-      reinforced_off_format: reinforcedOff.length
+      reinforced_off_format: reinforcedOff.length,
+      related_concept_items: conceptItems
     }
   };
 }
