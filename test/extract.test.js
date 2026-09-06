@@ -1221,6 +1221,35 @@ test('lint: a Related item without #N is reported only when it reads as an entry
   assert.deepEqual([both.related_lines, both.related_without_number, both.related_concept_items], [2, 0, 1], 'numbered + concept: nothing reported, both counted');
 });
 
+test('lint: a Related item naming two existing titles is still a reference (located null); the explicit "Pattern (title)" form is a reference even for an unknown title (#9, jinglever review of c421ac1)', async () => {
+  const { lintPatternEntries, parsePatternEntries } = await import('../scripts/lib.js');
+  const file = items => `## 1. Origin\n\`[Domain: Process | Type: Temporal]\`\n\n**Related patterns**:\n${items.map(i => `- ${i}`).join('\n')}\n\n## 2. Authoritative Registry\n\`[Domain: Process | Type: Constraint]\`\n\n## 3. Explicit Ownership\n\`[Domain: People | Type: Delegation]\`\n`;
+  const lint = items => lintPatternEntries(parsePatternEntries(file(items)));
+
+  // Finding 1: two full titles in one item resolve to nothing, but the item is a reference, not a concept.
+  const two = lint(['Authoritative Registry and Explicit Ownership — these two entries jointly explain the mechanism']);
+  assert.deepEqual(two.related_without_number.map(x => [x.number, x.located]), [[1, null]], 'reported with located null: ambiguity is not absence');
+  assert.deepEqual([two.summary.related_without_number, two.summary.related_located, two.summary.related_concept_items], [1, 0, 0]);
+  // Single-title control: still located.
+  const one = lint(['Authoritative Registry — the single title locates the second entry']);
+  assert.deepEqual(one.related_without_number.map(x => x.located), [2]);
+  assert.equal(one.summary.related_located, 1);
+  // Numbered control: nothing reported.
+  assert.equal(lint(['#2 (Authoritative Registry) and #3 (Explicit Ownership) — both numbered']).summary.related_without_number, 0);
+
+  // Finding 2: the explicit `Pattern (title)` form is the reference shape minus its number, whatever the title.
+  for (const ref of ['Pattern (Retired ledger principle) — the same principle applied to state', 'the same idea as Pattern (Retired ledger principle)', 'pattern(Whitelist over blacklist) — lowercase, no space']) {
+    const s = lint([ref]);
+    assert.deepEqual([s.summary.related_without_number, s.summary.related_concept_items], [1, 0], `reported: ${ref}`);
+    assert.equal(s.related_without_number[0].located, null, 'unknown title locates nothing but is still reported');
+  }
+  // True-concept controls: the word "pattern" in prose, without the parenthesised form, is not a reference.
+  for (const concept of ['Anti-pattern awareness over checklist compliance', 'A recurring pattern: ship the skeleton first', 'Whitelist over blacklist (explicit > implicit)']) {
+    const s = lint([concept]);
+    assert.deepEqual([s.summary.related_without_number, s.summary.related_concept_items], [0, 1], `not reported: ${concept}`);
+  }
+});
+
 test('lint: review boundaries — small file dangling, ambiguous titles, exact short title, wrapped bullet, "Data & Metrics"', async () => {
   const { lintPatternEntries, parsePatternEntries } = await import('../scripts/lib.js');
   const lint = text => lintPatternEntries(parsePatternEntries(text));
