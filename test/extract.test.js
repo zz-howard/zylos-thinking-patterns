@@ -1141,8 +1141,9 @@ test('lint reports Type outside the six, compound Domain, Related lines without 
   assert.deepEqual(lint.related_dangling, [{ number: 1, ref: 9 }, { number: 1, ref: 640 }], 'unresolved #N are dangling whatever their size; not the #9 after the Reinforced bullet');
   assert.deepEqual(lint.related_without_number.map(x => [x.number, x.located]), [[1, null], [1, 2], [1, null]]);
   assert.match(lint.related_without_number[2].text, /Issue #1 and PR #2/, 'ticket refs with their word do not make a line "numbered"');
+  assert.deepEqual(lint.reinforced_off_format, [{ number: 1, line: '- **Reinforced (2026-09-01)**: a Reinforced block written as a bullet ends the list' }], 'the bulleted header in #1 is off format; the canonical block in #2 is not');
   assert.deepEqual(lint.summary, {
-    type_off_vocabulary: 1, compound_domain: 1, related_lines: 7, related_without_number: 3, related_located: 1, related_dangling: 2
+    type_off_vocabulary: 1, compound_domain: 1, related_lines: 7, related_without_number: 3, related_located: 1, related_dangling: 2, reinforced_off_format: 1
   });
   assert.equal(fs.statSync(patternsFile).mtimeMs, before, 'lint is read-only');
   assert.equal(fs.readFileSync(patternsFile, 'utf8'), LINT_FIXTURE);
@@ -1162,17 +1163,17 @@ test('lint carries into fetch, and the entry index does not grow a related field
 test('negative control: a file that follows the methodology lints clean, and a missing file lints empty', () => {
   const { patternsFile, env } = setup(makeRows([10]));
   fs.writeFileSync(patternsFile, [
-    '## 1. One', '`[Domain: Process | Type: Temporal]`', '', '**Related patterns**:', '- #2 (Two) — pairs with this', '', '---', '',
+    '## 1. One', '`[Domain: Process | Type: Temporal]`', '', '**Related patterns**:', '- #2 (Two) — pairs with this', '', '**Reinforced (2026-09-02)**: the canonical header shape', '', '---', '',
     '## 2. Two', '`[Domain: People | Type: Delegation]`', '', '**Related patterns**:', '- #1 (One) — reverse', ''
   ].join('\n'));
   const clean = JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns.lint;
-  assert.deepEqual(clean.summary, { type_off_vocabulary: 0, compound_domain: 0, related_lines: 2, related_without_number: 0, related_located: 0, related_dangling: 0 });
-  assert.deepEqual([clean.type_off_vocabulary, clean.compound_domain, clean.related_without_number, clean.related_dangling], [[], [], [], []]);
+  assert.deepEqual(clean.summary, { type_off_vocabulary: 0, compound_domain: 0, related_lines: 2, related_without_number: 0, related_located: 0, related_dangling: 0, reinforced_off_format: 0 });
+  assert.deepEqual([clean.type_off_vocabulary, clean.compound_domain, clean.related_without_number, clean.related_dangling, clean.reinforced_off_format], [[], [], [], [], []]);
 
   fs.rmSync(patternsFile);
   const missing = JSON.parse(runNode(EXTRACT, ['inspect'], env)).patterns;
   assert.equal(missing.exists, false);
-  assert.deepEqual(missing.lint.summary, { type_off_vocabulary: 0, compound_domain: 0, related_lines: 0, related_without_number: 0, related_located: 0, related_dangling: 0 });
+  assert.deepEqual(missing.lint.summary, { type_off_vocabulary: 0, compound_domain: 0, related_lines: 0, related_without_number: 0, related_located: 0, related_dangling: 0, reinforced_off_format: 0 });
 });
 
 test('negative control: each lint class can fail — one mutation per class flips its count from 0', async () => {
@@ -1183,12 +1184,25 @@ test('negative control: each lint class can fail — one mutation per class flip
     type_off_vocabulary: base.replace('Type: Constraint', 'Type: Heuristic'),
     compound_domain: base.replace('Domain: Process', 'Domain: Process/People'),
     related_without_number: base.replace('- #2 (Beta) — ok', '- Beta — no number'),
-    related_dangling: base.replace('- #2 (Beta) — ok', '- #1 and #2 fine, #2 again fine').replace('## 2. Beta entry', '## 3. Beta entry')
+    related_dangling: base.replace('- #2 (Beta) — ok', '- #1 and #2 fine, #2 again fine').replace('## 2. Beta entry', '## 3. Beta entry'),
+    reinforced_off_format: base + '\n**Reinforced (2026-09-03, Day 3)**: a day count inside the parentheses\n'
   };
   for (const [key, text] of Object.entries(mutants)) {
     const summary = lintPatternEntries(parsePatternEntries(text)).summary;
     assert.ok(summary[key] > 0, `${key} must be caught: ${JSON.stringify(summary)}`);
   }
+});
+
+test('lint: reinforced_off_format — every Markdown list marker is a bullet; a canonical paragraph is not reported', async () => {
+  const { lintPatternEntries, parsePatternEntries } = await import('../scripts/lib.js');
+  const entry = (line) => `## 1. Alpha\n\`[Domain: Process | Type: Constraint]\`\n\n${line}\n`;
+  for (const marker of ['-', '*', '+']) {
+    const lint = lintPatternEntries(parsePatternEntries(entry(`${marker} **Reinforced (2026-09-03)**: event`)));
+    assert.equal(lint.summary.reinforced_off_format, 1, `a "${marker}" bullet is off format`);
+  }
+  assert.equal(lintPatternEntries(parsePatternEntries(entry('**Reinforced (2026-09-03)**: event'))).summary.reinforced_off_format, 0, 'the canonical paragraph is not reported');
+  assert.equal(lintPatternEntries(parsePatternEntries(entry('**Reinforced**: 2026-09-03 — date in the text'))).summary.reinforced_off_format, 1);
+  assert.equal(lintPatternEntries(parsePatternEntries(entry('**Reinforcing event (2026-09-03)**: other label'))).summary.reinforced_off_format, 1);
 });
 
 test('lint: review boundaries — small file dangling, ambiguous titles, exact short title, wrapped bullet, "Data & Metrics"', async () => {

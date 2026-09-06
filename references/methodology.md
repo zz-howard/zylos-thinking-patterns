@@ -130,6 +130,9 @@ the next `---` separator), never as a new entry:
 sharper boundary, a corollary, a counter-case>
 ```
 
+The header carries the date alone; a time, place, or day-count qualifier belongs in
+the text, and the block is a paragraph at the line start, not a list item.
+
 If the reinforcement yields a genuinely new corollary, add an
 `**Extracted corollary**:` paragraph after it. A Reinforced block may also
 record a counter-case — an event where the principle did not apply or was

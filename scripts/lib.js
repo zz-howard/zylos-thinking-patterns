@@ -367,6 +367,12 @@ export function policyIsUnconfigured(policyPath = POLICY_PATH) {
 // title and tag first and read only the entries that match.
 const ENTRY_HEADING = /^## (\d+)\.\s+(.*?)\s*$/;
 const REINFORCED = /^\*\*Reinforced \(/;
+// The methodology's only Reinforced header: `**Reinforced (YYYY-MM-DD)**: ` at the line start.
+const REINFORCED_CANONICAL = /^\*\*Reinforced \(\d{4}-\d{2}-\d{2}\)\*\*: /;
+// Anything that reads as a reinforcement header: canonical or not, bulleted with any of the
+// three Markdown list markers (`-`, `*`, `+`) or not, and the labels `Reinforcing event` /
+// `Reinforcement`. Lint compares these against the canonical shape.
+const REINFORCED_LIKE = /^\s*(?:[-*+]\s+)?\*\*Reinforc(?:ed|ing|ement)\b[^*\n]*\*\*/;
 const RELATED_HEADING = /^\*\*Related patterns\*\*/;
 const RELATED_ITEM = /^\s*[-*]\s+(.*\S)\s*$/;
 const ISSUE_REF = /\b(?:issue|pr|mr)s?\s*#\d+/gi;
@@ -390,12 +396,13 @@ export function parsePatternEntries(text) {
   for (const line of text.split('\n')) {
     const heading = line.match(ENTRY_HEADING);
     if (heading) {
-      current = { number: Number(heading[1]), title: heading[2], domain: null, type: null, reinforced: 0, related: [] };
+      current = { number: Number(heading[1]), title: heading[2], domain: null, type: null, reinforced: 0, related: [], reinforcedLines: [] };
       entries.push(current);
       inRelated = false;
       continue;
     }
     if (!current) continue;
+    if (REINFORCED_LIKE.test(line)) current.reinforcedLines.push(line);
     if (inRelated) {
       const item = line.match(RELATED_ITEM);
       // A "- **Reinforced (...)**" bullet is a Reinforced block, not a relation: it ends the list.
@@ -452,8 +459,14 @@ export function lintPatternEntries(entries) {
   const compound = [];
   const withoutNumber = [];
   const dangling = [];
+  const reinforcedOff = [];
   let relatedLines = 0;
   for (const e of entries) {
+    // A reinforcement header in any shape but the canonical one: bulleted, `Day N` or another
+    // qualifier inside the parentheses, the date in the text, or a different label.
+    for (const line of e.reinforcedLines || []) {
+      if (!REINFORCED_CANONICAL.test(line)) reinforcedOff.push({ number: e.number, line: line.length > 120 ? `${line.slice(0, 117)}...` : line });
+    }
     if (e.type !== null && !PATTERN_TYPES.includes(e.type)) typeOff.push({ number: e.number, type: e.type });
     // Issue #4 names three compound shapes: "A/B", "A, B", "A & B". All three are
     // reported, with the separator found, so the owner can tell them apart: the
@@ -481,13 +494,15 @@ export function lintPatternEntries(entries) {
     compound_domain: compound,
     related_without_number: withoutNumber,
     related_dangling: dangling,
+    reinforced_off_format: reinforcedOff,
     summary: {
       type_off_vocabulary: typeOff.length,
       compound_domain: compound.length,
       related_lines: relatedLines,
       related_without_number: withoutNumber.length,
       related_located: withoutNumber.filter(x => x.located !== null).length,
-      related_dangling: dangling.length
+      related_dangling: dangling.length,
+      reinforced_off_format: reinforcedOff.length
     }
   };
 }
@@ -510,7 +525,7 @@ export function inspectPatternsFile(patternsFile) {
     reinforced_count: entries.reduce((sum, e) => sum + e.reinforced, 0),
     domains: tally(tagged.map(e => e.domain)),
     types: tally(tagged.map(e => e.type)),
-    entries: entries.map(({ related, ...index }) => index),
+    entries: entries.map(({ related, reinforcedLines, ...index }) => index),
     lint: lintPatternEntries(entries)
   };
 }
