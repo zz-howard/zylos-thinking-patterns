@@ -429,10 +429,13 @@ export function parsePatternEntries(text) {
   return entries;
 }
 
-// Locating a number-less "Related patterns" line among entry titles: the full
-// title (case-insensitive) wins; otherwise the title's prefix before its first
-// dash/em-dash separator, but only when that prefix is at least 8 characters
-// and belongs to exactly one entry. Anything ambiguous locates nothing.
+// Locating a number-less "Related patterns" line among entry titles. Returns
+// `{ named, located }`: `named` is true when the line contains at least one existing
+// entry's full title (case-insensitive) or the unique prefix of a title before its
+// first dash/em-dash separator (prefix at least 8 characters, belonging to exactly one
+// entry); `located` is that entry's number when the match is unique, else null. The two
+// are kept apart on purpose: a line naming two full titles is still a reference (named)
+// even though it resolves to nothing (located null) — ambiguity is not absence.
 function titleLocator(entries) {
   const full = entries.map(e => ({ number: e.number, key: String(e.title).trim().toLowerCase() })).filter(k => k.key.length >= 2);
   const prefixCounts = new Map();
@@ -441,12 +444,22 @@ function titleLocator(entries) {
   return (text, self) => {
     const lower = text.toLowerCase();
     const exact = full.filter(k => k.number !== self && lower.includes(k.key));
-    if (exact.length === 1) return exact[0].number;
-    if (exact.length > 1) return null;
+    if (exact.length === 1) return { named: true, located: exact[0].number };
+    if (exact.length > 1) return { named: true, located: null };
     const byPrefix = prefixes.filter(k => k.number !== self && prefixCounts.get(k.key) === 1 && lower.includes(k.key));
-    return byPrefix.length === 1 ? byPrefix[0].number : null;
+    return byPrefix.length === 1 ? { named: true, located: byPrefix[0].number } : { named: false, located: null };
   };
 }
+
+// A number-less Related item that still reads as a reference to an entry: it opens with a
+// relation verb, it uses the explicit `Pattern (title)` form anywhere in the item (the
+// methodology's reference shape minus its number, whether or not that title still exists),
+// or it names an existing entry title (see titleLocator). Everything else under
+// `Related patterns` without a #N is a concept item — a principle or idea with no entry —
+// which the methodology allows and the lint does not report. The word "pattern" alone in
+// prose ("anti-pattern awareness") is not the explicit form; the parenthesis is.
+const REFERENCE_LIKE = /^(?:connects?\s+to|see(?:\s+also)?|extends?|cf\.?|relates?\s+to|complements?|counterpart\s+(?:of|to)|inverse\s+of)\b/i;
+const PATTERN_FORM = /\bpattern\s*\(/i;
 
 // Read-only drift report against the methodology: Type outside the fixed six,
 // possible compound Domain (owner check), Related lines with no #N (and whether the name they use can
@@ -461,6 +474,7 @@ export function lintPatternEntries(entries) {
   const dangling = [];
   const reinforcedOff = [];
   let relatedLines = 0;
+  let conceptItems = 0;
   for (const e of entries) {
     // A reinforcement header in any shape but the canonical one: bulleted, `Day N` or another
     // qualifier inside the parentheses, the date in the text, or a different label.
@@ -483,7 +497,13 @@ export function lintPatternEntries(entries) {
       // too, and the owner rewrites the line to say what it is.
       const refs = [...text.replace(ISSUE_REF, '').matchAll(/#(\d+)/g)].map(m => Number(m[1]));
       if (refs.length === 0) {
-        withoutNumber.push({ number: e.number, text: text.length > 120 ? `${text.slice(0, 117)}...` : text, located: locate(text, e.number) });
+        // Reported only when the item reads as an entry reference: a relation verb, the explicit
+        // `Pattern (title)` form, or an existing title named in the text — including a text that
+        // names more than one title and therefore locates nothing (`located` null, still
+        // reported). A concept item is legitimate content and is counted, not reported.
+        const { named, located } = locate(text, e.number);
+        if (named || REFERENCE_LIKE.test(text) || PATTERN_FORM.test(text)) withoutNumber.push({ number: e.number, text: text.length > 120 ? `${text.slice(0, 117)}...` : text, located });
+        else conceptItems += 1;
       } else {
         for (const ref of refs) if (!numbers.has(ref)) dangling.push({ number: e.number, ref });
       }
@@ -502,7 +522,8 @@ export function lintPatternEntries(entries) {
       related_without_number: withoutNumber.length,
       related_located: withoutNumber.filter(x => x.located !== null).length,
       related_dangling: dangling.length,
-      reinforced_off_format: reinforcedOff.length
+      reinforced_off_format: reinforcedOff.length,
+      related_concept_items: conceptItems
     }
   };
 }
