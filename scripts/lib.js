@@ -369,9 +369,10 @@ const ENTRY_HEADING = /^## (\d+)\.\s+(.*?)\s*$/;
 const REINFORCED = /^\*\*Reinforced \(/;
 // The methodology's only Reinforced header: `**Reinforced (YYYY-MM-DD)**: ` at the line start.
 const REINFORCED_CANONICAL = /^\*\*Reinforced \(\d{4}-\d{2}-\d{2}\)\*\*: /;
-// Anything that reads as a reinforcement header: canonical or not, bulleted or not, and the
-// labels `Reinforcing event` / `Reinforcement`. Lint compares these against the canonical shape.
-const REINFORCED_LIKE = /^\s*(?:[-*]\s+)?\*\*Reinforc(?:ed|ing|ement)\b[^*\n]*\*\*/;
+// Anything that reads as a reinforcement header: canonical or not, bulleted with any of the
+// three Markdown list markers (`-`, `*`, `+`) or not, and the labels `Reinforcing event` /
+// `Reinforcement`. Lint compares these against the canonical shape.
+const REINFORCED_LIKE = /^\s*(?:[-*+]\s+)?\*\*Reinforc(?:ed|ing|ement)\b[^*\n]*\*\*/;
 const RELATED_HEADING = /^\*\*Related patterns\*\*/;
 const RELATED_ITEM = /^\s*[-*]\s+(.*\S)\s*$/;
 const ISSUE_REF = /\b(?:issue|pr|mr)s?\s*#\d+/gi;

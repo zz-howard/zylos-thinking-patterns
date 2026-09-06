@@ -1193,6 +1193,18 @@ test('negative control: each lint class can fail — one mutation per class flip
   }
 });
 
+test('lint: reinforced_off_format — every Markdown list marker is a bullet; a canonical paragraph is not reported', async () => {
+  const { lintPatternEntries, parsePatternEntries } = await import('../scripts/lib.js');
+  const entry = (line) => `## 1. Alpha\n\`[Domain: Process | Type: Constraint]\`\n\n${line}\n`;
+  for (const marker of ['-', '*', '+']) {
+    const lint = lintPatternEntries(parsePatternEntries(entry(`${marker} **Reinforced (2026-09-03)**: event`)));
+    assert.equal(lint.summary.reinforced_off_format, 1, `a "${marker}" bullet is off format`);
+  }
+  assert.equal(lintPatternEntries(parsePatternEntries(entry('**Reinforced (2026-09-03)**: event'))).summary.reinforced_off_format, 0, 'the canonical paragraph is not reported');
+  assert.equal(lintPatternEntries(parsePatternEntries(entry('**Reinforced**: 2026-09-03 — date in the text'))).summary.reinforced_off_format, 1);
+  assert.equal(lintPatternEntries(parsePatternEntries(entry('**Reinforcing event (2026-09-03)**: other label'))).summary.reinforced_off_format, 1);
+});
+
 test('lint: review boundaries — small file dangling, ambiguous titles, exact short title, wrapped bullet, "Data & Metrics"', async () => {
   const { lintPatternEntries, parsePatternEntries } = await import('../scripts/lib.js');
   const lint = text => lintPatternEntries(parsePatternEntries(text));
