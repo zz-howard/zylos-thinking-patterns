@@ -5,14 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.2.2] - 2026-09-06
+
+### Changed
+- `patterns.lint.related_without_number` now reports only number-less `Related patterns` items that read as an entry reference — opening with a relation verb (`Connects to`, `See`, `Extends`, `Inverse of`, …) or naming an existing entry's title. Other number-less items are *concept items* (a principle with no entry, such as `Whitelist over blacklist`), which the methodology now allows explicitly; they are counted in `summary.related_concept_items` and not reported. Two shapes stay reported that a first cut let through (jinglever, review of c421ac1): an item that names *two* existing titles (reported with `located` null — ambiguity is not absence) and the explicit `Pattern (title)` form with a title that no longer exists. On a 166-entry file this turns 131 reported lines, 0 of them real, into the handful that actually name an entry without its number (#9).
+
 ## [0.2.1] - 2026-09-06
 
 ### Added
 - `patterns.lint.reinforced_off_format`: every line that reads as a reinforcement header but is not the methodology's `**Reinforced (YYYY-MM-DD)**: ` at the line start — bulleted, `Day N` or another qualifier inside the parentheses, `**Reinforced**:` with the date in the text, or the labels `Reinforcing event` / `Reinforcement` — reported as `{number, line}`; `summary.reinforced_off_format` carries the count. Found while normalizing a 166-entry file: 50 such headers in four shapes, some written by the extraction workflow itself. Report only; nothing is changed (#7).
 - `SKILL.md` hard requirement for the Reinforced header shape; `references/methodology.md` states that the header carries the date alone and the block is a paragraph, not a list item (#7).
-
-### Changed
-- `patterns.lint.related_without_number` now reports only number-less `Related patterns` items that read as an entry reference — opening with a relation verb (`Connects to`, `See`, `Extends`, `Inverse of`, …) or naming an existing entry's title. Other number-less items are *concept items* (a principle with no entry, such as `Whitelist over blacklist`), which the methodology now allows explicitly; they are counted in `summary.related_concept_items` and not reported. Two shapes stay reported that a first cut let through (jinglever, review of c421ac1): an item that names *two* existing titles (reported with `located` null — ambiguity is not absence) and the explicit `Pattern (title)` form with a title that no longer exists. On a 166-entry file this turns 131 reported lines, 0 of them real, into the handful that actually name an entry without its number (#9).
 
 ## [0.2.0] - 2026-09-05
 
