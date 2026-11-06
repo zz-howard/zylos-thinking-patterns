@@ -7,10 +7,14 @@ export function coreRoot() {
   return fs.realpathSync(process.env.ZYLOS_PACKAGE_ROOT);
 }
 
-// Existing window/buffer tests keep their stand-in fetch, but use the actual
-// Core resolver and public projector for the new availability prerequisite.
-export function copyCoreResolver(directory) {
-  fs.writeFileSync(path.join(directory, 'package.json'), '{"type":"module"}');
-  fs.copyFileSync(path.join(coreRoot(), 'skills/comm-bridge/scripts/core-config-loader.js'),
-    path.join(directory, 'core-config-loader.js'));
+// Unit tests use a private, minimal Core package and stand-in history CLI.
+// Only the separately selected integration file requires an actual checkout.
+export function createFakeCore(directory) {
+  const lib = path.join(directory, 'cli/lib');
+  fs.mkdirSync(lib, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'package.json'), '{"name":"zylos","type":"module"}');
+  fs.writeFileSync(path.join(lib, 'config.js'), 'export {};\n');
+  fs.writeFileSync(path.join(lib, 'content-projection.js'), 'export const projectC4Content = content => content;\n');
+  fs.writeFileSync(path.join(directory, 'core-config-loader.js'),
+    "import { fileURLToPath } from 'node:url';\nexport function resolveCoreConfigModule() { return fileURLToPath(new URL('./cli/lib/config.js', import.meta.url)); }\n");
 }

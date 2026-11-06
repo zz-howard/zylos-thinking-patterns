@@ -34,9 +34,13 @@ Requires a **Core version containing Dashboard conversation projection**
 integration baseline is Core `e3eaf512`, currently unreleased. Configure the
 matching Core `c4-db.js` for `c4_db_cli`. Before the first recent-history read,
 fetch uses that script's existing Core resolver to load public
-`cli/lib/content-projection.js` and require `projectC4Content`. If unavailable,
+`cli/lib/content-projection.js`. If unavailable,
 it stops with a JSON error without reading conversation bodies or changing run
 state. Disabled/unconfigured runs continue to skip without reading history.
+
+Complete the matching comm-bridge skills synchronization when upgrading Core.
+A new Core package with stale skills is not sufficient: this check verifies
+package entry availability, not whether installed skills were synchronized.
 
 Core's `recent` output already projects complete messages. `max_page_bytes`
 measures that projected JSON page, including its metadata/JSON formatting; it
@@ -141,17 +145,17 @@ Architecture and the full list of design decisions live in [docs/DESIGN.md](./do
 ## Development
 
 ```bash
-npm test        # node:test suite; fakes the comm-bridge CLIs, no sqlite3 needed
+npm test        # self-contained unit/release tests; no Core checkout or sqlite3 needed
 npm run check   # syntax check of scripts and hooks
 ```
 
-## License
+The default tests create private minimal fake Core packages and comm-bridge
+CLIs. They need neither ZYLOS_PACKAGE_ROOT nor TEST_LEGACY_CORE_ROOT.
 
-[MIT](./LICENSE)
+## Projection Integration Tests
 
-## Projection Tests
-
-Use a Core checkout at `e3eaf512cd11b92d250b03db90fda442133751e1` with its
+These tests are opt-in and require sqlite3. Use a Core checkout at
+`e3eaf512cd11b92d250b03db90fda442133751e1` with its
 existing development dependencies and an older Core checkout at `6436b3e2`
 without the public projection module. Do not install either into a live instance.
 Keep the component's `v0.2.2` Git tag available for the unchanged transcript
@@ -163,8 +167,9 @@ sqlite3 to seed their private database; production uses the comm-bridge CLI.
 ```bash
 ZYLOS_PACKAGE_ROOT=/path/to/core-checkout \
 TEST_LEGACY_CORE_ROOT=/path/to/older-core \
-node --test test/projected-history.test.js
-
-ZYLOS_PACKAGE_ROOT=/path/to/core-checkout \
-node --test --test-name-pattern='^fetch|^the read is bounded|^a first page over|^too few messages after' test/extract.test.js
+npm run test:integration
 ```
+
+## License
+
+[MIT](./LICENSE)

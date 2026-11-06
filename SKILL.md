@@ -38,9 +38,13 @@ Requires a **Core version containing Dashboard conversation projection**
 integration baseline is Core `e3eaf512`, currently unreleased. Configure the
 matching Core `c4-db.js` for `c4_db_cli`. Before the first recent-history read,
 fetch uses that script's existing Core resolver to load public
-`cli/lib/content-projection.js` and require `projectC4Content`. If unavailable,
+`cli/lib/content-projection.js`. If unavailable,
 it stops with a JSON error without reading conversation bodies or changing run
 state. Disabled/unconfigured runs continue to skip without reading history.
+
+Complete the matching comm-bridge skills synchronization when upgrading Core.
+A new Core package with stale skills is not sufficient: this check verifies
+package entry availability, not whether installed skills were synchronized.
 
 Core's `recent` output already projects complete messages. `max_page_bytes`
 measures that projected JSON page, including its metadata/JSON formatting; it
