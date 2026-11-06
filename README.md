@@ -27,6 +27,25 @@ The **methodology** is fixed and ships with the component. Everything scenario-s
 - Node.js 20+, provided by the Zylos runtime.
 - The Zylos `comm-bridge` and `scheduler` skills. All conversation access goes through the comm-bridge CLI; the component never opens the C4 database directly and does not need `sqlite3`.
 
+## Core Requirement
+
+Requires a **Core version containing Dashboard conversation projection**
+(minimum release version: **TBD**, to be filled in at Core release). The
+integration baseline is Core `e3eaf512`, currently unreleased. Configure the
+matching Core `c4-db.js` for `c4_db_cli`. Before the first recent-history read,
+fetch uses that script's existing Core resolver to load public
+`cli/lib/content-projection.js` and require `projectC4Content`. If unavailable,
+it stops with a JSON error without reading conversation bodies or changing run
+state. Disabled/unconfigured runs continue to skip without reading history.
+
+Core's `recent` output already projects complete messages. `max_page_bytes`
+measures that projected JSON page, including its metadata/JSON formatting; it
+does not measure the stored raw envelopes or only the final transcript body.
+The transcript uses the returned text unchanged, without a second projection,
+local envelope parser, raw fallback, new configuration switch or automatic
+disable state. Core resolution follows the existing `ZYLOS_PACKAGE_ROOT`,
+checkout, PATH and npm lookup rules.
+
 ## Install
 
 ```bash
@@ -129,3 +148,23 @@ npm run check   # syntax check of scripts and hooks
 ## License
 
 [MIT](./LICENSE)
+
+## Projection Tests
+
+Use a Core checkout at `e3eaf512cd11b92d250b03db90fda442133751e1` with its
+existing development dependencies and an older Core checkout at `6436b3e2`
+without the public projection module. Do not install either into a live instance.
+Keep the component's `v0.2.2` Git tag available for the unchanged transcript
+baseline. Run with temporary HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR. Cases
+create private C4 databases and policy/pattern paths, and clean up their files;
+no model, runtime, network, PM2 or tmux is invoked. Only the test fixtures use
+sqlite3 to seed their private database; production uses the comm-bridge CLI.
+
+```bash
+ZYLOS_PACKAGE_ROOT=/path/to/core-checkout \
+TEST_LEGACY_CORE_ROOT=/path/to/older-core \
+node --test test/projected-history.test.js
+
+ZYLOS_PACKAGE_ROOT=/path/to/core-checkout \
+node --test --test-name-pattern='^fetch|^the read is bounded|^a first page over|^too few messages after' test/extract.test.js
+```

@@ -8,7 +8,7 @@
     "zylos-thinking-patterns": "scripts/extract.js"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
     "check": "node --check scripts/lib.js && node --check scripts/extract.js && node --check hooks/post-install.js && node --check hooks/pre-upgrade.js && node --check hooks/post-upgrade.js"
   },
   "homepage": "https://github.com/zz-howard/zylos-thinking-patterns#readme",

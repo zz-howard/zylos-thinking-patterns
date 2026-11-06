@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Require the public Core conversation-projection API before reading recent history; stop explicitly when unavailable, preserving the already-projected JSON page budget and transcript text.
+- Document the minimum Core release requirement (version TBD) and select test files explicitly.
+
 ## [0.2.2] - 2026-09-06
 
 ### Changed
