@@ -37,12 +37,13 @@ negative controls intact — a gate that cannot fail proves nothing.
 
 ## Testing
 
-- `npm test` runs `node --test` over `test/*.test.js`; `npm run check` syntax-checks scripts and hooks
+- `npm test` explicitly runs `test/extract.test.js` and `test/release-consistency.test.js`; `npm run check` syntax-checks scripts and hooks
+- `npm run test:integration` runs `test/projected-history.test.js` with the real Core checkouts and private databases described in README.md
 - The release-consistency gate (above) ships with the component and must stay
 - When a test guards specific logic, prove it can fail: temporarily break the
   guarded behavior (a known-bad mutant), confirm the test goes red, restore
   the behavior, and keep the test
-- Tests fake the comm-bridge and scheduler CLIs and point the component at a
+- Default tests fake the comm-bridge and scheduler CLIs and point the component at a
   temporary data directory (`ZYLOS_DATA_DIR`); they never read the real C4
   database or the real `~/zylos`
 

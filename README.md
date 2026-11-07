@@ -27,6 +27,15 @@ The **methodology** is fixed and ships with the component. Everything scenario-s
 - Node.js 20+, provided by the Zylos runtime.
 - The Zylos `comm-bridge` and `scheduler` skills. All conversation access goes through the comm-bridge CLI; the component never opens the C4 database directly and does not need `sqlite3`.
 
+## Core History Compatibility
+
+On Core versions with conversation projection, structured history messages
+appear as readable text. Earlier Core versions already provide plain-text
+history, so extraction works as usual with no minimum Core version requirement.
+The component measures the JSON page returned by Core, including metadata and
+formatting, then passes its text unchanged to the extraction agent without
+projecting it a second time.
+
 ## Install
 
 ```bash
@@ -122,8 +131,31 @@ Architecture and the full list of design decisions live in [docs/DESIGN.md](./do
 ## Development
 
 ```bash
-npm test        # node:test suite; fakes the comm-bridge CLIs, no sqlite3 needed
+npm test        # self-contained unit/release tests; no Core checkout or sqlite3 needed
 npm run check   # syntax check of scripts and hooks
+```
+
+The default tests create fake comm-bridge CLIs in private directories. They
+need neither ZYLOS_PACKAGE_ROOT nor TEST_LEGACY_CORE_ROOT.
+
+## Projection Integration Tests
+
+These tests are opt-in and require sqlite3. Use the current `multi-session/chat`
+Core checkout with its
+existing development dependencies and an older Core checkout at `6436b3e2`
+without the public projection module. Both checkouts need existing Core
+dependencies. The tests import the message prefix from the current Core schema.
+Do not install either into a live instance.
+Keep the component's `v0.2.2` Git tag available for the unchanged transcript
+baseline. Run with temporary HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR. Cases
+create private C4 databases and policy/pattern paths, and clean up their files;
+no model, runtime, network, PM2 or tmux is invoked. Only the test fixtures use
+sqlite3 to seed their private database; production uses the comm-bridge CLI.
+
+```bash
+ZYLOS_PACKAGE_ROOT=/path/to/core-checkout \
+TEST_LEGACY_CORE_ROOT=/path/to/older-core \
+npm run test:integration
 ```
 
 ## License

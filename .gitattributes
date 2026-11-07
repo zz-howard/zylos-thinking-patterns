@@ -1,0 +1,3 @@
+/test/extract.test.js export-ignore
+/test/projected-history.test.js export-ignore
+/test/helpers/ export-ignore

@@ -31,6 +31,15 @@ dependencies:
 
 The component mines conversations for decision moments and distills the ones that generalize into numbered pattern entries. The methodology is fixed and ships with the component (`references/methodology.md`). What is extracted, from where, into which file, how candidates are confirmed, and **when and how far back each run looks** are the **owner's** decisions, all written in one policy file. The script fetches a time window, applies the policy's channel filter and keeps run state; it never writes patterns. Judgment belongs to the agent.
 
+## Core History Compatibility
+
+On Core versions with conversation projection, structured history messages
+appear as readable text. Earlier Core versions already provide plain-text
+history, so extraction works as usual with no minimum Core version requirement.
+The component measures the JSON page returned by Core, including metadata and
+formatting, then passes its text unchanged to the extraction agent without
+projecting it a second time.
+
 ## Owner Setup (once, after install)
 
 Installation creates the data directory with a policy **template**. Until the owner fills it in, every run is skipped with reason `unconfigured`.

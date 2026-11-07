@@ -201,6 +201,8 @@ function commandFetch(args) {
   }
 
   const c4DbCli = requireScript(config.c4_db_cli, 'c4-db.js');
+  // Core supplies readable history. Count its JSON bytes and format its text
+  // unchanged; do not project the output a second time.
   // Order matters: window → channel filter → cap. The cap is applied to the
   // messages the agent would actually read, so `truncated` means "the window
   // holds more in-scope messages than max_conversations", and rows that the

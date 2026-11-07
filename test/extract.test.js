@@ -915,6 +915,7 @@ function runPrintedRegistration(templateText, home) {
 
 test('printed registration command passes the prompt to the scheduler verbatim and never runs fetch', () => {
   const { dir, env } = setup(makeRows([10]));
+  env.ZYLOS_DIR = ''; // This fixture installs its fake CLIs at the default HOME path.
   const expected = JSON.parse(runNode(EXTRACT, ['template', '--json', '--lookback', '7d', '--task', 'weekly', '--policy', 'work', '--cron', '0 22 * * 0'], env));
   const text = runNode(EXTRACT, ['template', '--lookback', '7d', '--task', 'weekly', '--policy', 'work', '--cron', '0 22 * * 0'], env);
 
