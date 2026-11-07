@@ -7,7 +7,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
   CONFIG_PATH, STATE_PATH, LOG_DIR, RUN_LOG_PATH, METHODOLOGY_PATH,
@@ -72,19 +71,8 @@ function requireScript(filePath, label) {
   return resolved;
 }
 
-async function requireProjectedHistory(c4DbCli) {
-  try {
-    const loader = path.join(path.dirname(fs.realpathSync(c4DbCli)), 'core-config-loader.js');
-    const { resolveCoreConfigModule } = await import(pathToFileURL(loader).href);
-    const entry = path.join(path.dirname(resolveCoreConfigModule()), 'content-projection.js');
-    await import(pathToFileURL(entry).href);
-  } catch {
-    throw new Error('Projected C4 history requires a Core version with Dashboard conversation projection (minimum version TBD): cannot load public cli/lib/content-projection.js for the configured c4-db.js. No history was read.');
-  }
-}
-
 // `c4-db.js recent N` returns the N newest rows ordered by timestamp, oldest first,
-// each with its already projected content — exactly the primitive a time window needs. Its output
+// each with its content — exactly the primitive a time window needs. Its output
 // goes to a private temp file, not a pipe buffer, so a page can be measured
 // before anything is parsed: a page larger than maxBytes is discarded unread
 // (`rows: null`) instead of failing with ENOBUFS or being parsed into memory.
@@ -157,7 +145,7 @@ function policySummary(policy) {
   };
 }
 
-async function commandFetch(args) {
+function commandFetch(args) {
   const config = loadConfig();
   const task = normalizeTaskName(args.task);
   const policy = readPolicy(normalizePolicyName(args.policy));
@@ -213,9 +201,8 @@ async function commandFetch(args) {
   }
 
   const c4DbCli = requireScript(config.c4_db_cli, 'c4-db.js');
-  await requireProjectedHistory(c4DbCli);
-  // Core projects before emitting recent JSON. Page-byte accounting and
-  // formatTranscript consume that output once, without re-projecting fallback text.
+  // Core supplies readable history. Count its JSON bytes and format its text
+  // unchanged; do not project the output a second time.
   // Order matters: window → channel filter → cap. The cap is applied to the
   // messages the agent would actually read, so `truncated` means "the window
   // holds more in-scope messages than max_conversations", and rows that the
@@ -344,10 +331,10 @@ function commandTemplate(args) {
   process.exit(0);
 }
 
-async function main() {
+function main() {
   const { command, args } = parseArgs(process.argv.slice(2));
   try {
-    if (command === 'fetch') await commandFetch(args);
+    if (command === 'fetch') commandFetch(args);
     if (command === 'commit') commandCommit(args);
     if (command === 'inspect') commandInspect(args);
     if (command === 'status') commandStatus(args);
@@ -361,4 +348,4 @@ async function main() {
   }
 }
 
-await main();
+main();

@@ -10,12 +10,11 @@ import { coreRoot } from './helpers/core-fixture.js';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const EXTRACT = path.join(ROOT, 'scripts/extract.js');
 const CORE = coreRoot();
-assert.equal(execFileSync('git', ['-C', CORE, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
-  'e3eaf512cd11b92d250b03db90fda442133751e1', 'Use the fixed, unreleased Core checkout');
 const CORE_SCRIPTS = path.join(CORE, 'skills/comm-bridge/scripts');
+const { CONTENT_PREFIX } = await import(pathToFileURL(path.join(CORE_SCRIPTS, 'c4-content-schema.js')).href);
 const protocol = JSON.parse(fs.readFileSync(path.join(CORE, 'test/fixtures/c4-content-protocol.json'), 'utf8'));
 const hidden = 'HOST_PRIVATE_PAYLOAD_SENTINEL';
-const encode = value => '[C4-CONTENT]\n' + JSON.stringify(value);
+const encode = value => CONTENT_PREFIX + JSON.stringify(value);
 const quote = value => "'" + value.replaceAll("'", "''") + "'";
 function envelope(extra = {}) {
   const value = structuredClone(protocol.valid.find(x => x.name === 'markdown').envelope);
@@ -83,9 +82,9 @@ function ready(f, script) {
 test('extraction transcript uses projected content for both directions and preserves stored bodies', t => {
   const f = fixture(t);
   const long = envelope({ messageId: 'long_history' }); long.blocks[0].data.text = hidden + 'x'.repeat(20000);
-  const nested = envelope({ messageId: 'nested_history', fallbackText: '[C4-CONTENT]\nliteral fallback' });
+  const nested = envelope({ messageId: 'nested_history', fallbackText: CONTENT_PREFIX + 'literal fallback' });
   const plain = 'ordinary {"json":true}\nUnicode 中🚀 and \\ slash';
-  const rows = f.seed([encode(envelope()), '[C4-CONTENT]\n{"private":"' + hidden + '"', encode(long), plain,
+  const rows = f.seed([encode(envelope()), CONTENT_PREFIX + '{"private":"' + hidden + '"', encode(long), plain,
     encode(nested), protocol.valid.find(x => x.name === 'answer_single_select').content]);
   const before = f.sql('SELECT id,hex(content) FROM conversations ORDER BY id;');
   const result = ready(f);
@@ -98,7 +97,7 @@ test('extraction transcript uses projected content for both directions and prese
     if (row.content.includes('"private"')) assert.ok(result.conversations.includes(`[C4 content invalid; c4_id=${row.id}]`));
     else if (row.content === plain) assert.ok(result.conversations.includes(plain));
     else {
-      const value = JSON.parse(row.content.slice('[C4-CONTENT]\n'.length));
+      const value = JSON.parse(row.content.slice(CONTENT_PREFIX.length));
       const interrupt = value.interruptId === undefined ? '' : ` interruptId=${value.interruptId}`;
       assert.ok(result.conversations.includes(`${value.fallbackText}\n[C4 messageId=${value.messageId}${interrupt}; c4_id=${row.id}]`));
       assert.equal(result.conversations.includes(row.content), false);
@@ -140,33 +139,37 @@ test('ordinary transcript is byte identical to the previous component release', 
   for (const field of ['count', 'filtered_out', 'truncated', 'truncated_out', 'window_complete', 'window']) assert.deepEqual(current[field], baseline[field]);
 });
 
-// Integration: actual older Core without public projection must stop before
-// recent reads. Run for prerequisite/resolution changes; skip unrelated policies.
-// No raw fallback or state/pattern write; same private env/process bounds.
-test('Core without public projection stops extraction before reading original history', t => {
-  const f = fixture(t); f.seed([hidden]);
+// Integration: older Core without projection reads ordinary history normally.
+// Run for Core compatibility/history handoff changes; skip unrelated hooks.
+// Same checked private DB/env, fixed clock, bounded children and cleanup; the
+// transcript and result fields must match the unchanged main release; only
+// the separately checked code-relative methodology path differs by checkout.
+test('Core without projection reads plain history byte identically to the main baseline', t => {
+  const f = fixture(t);
+  f.seed(['ordinary legacy history', '{"ordinary":"JSON"}\n中文🚀', 'quotes \' and \\ slash']);
   const legacy = fs.realpathSync(process.env.TEST_LEGACY_CORE_ROOT);
   assert.equal(fs.existsSync(path.join(legacy, 'cli/lib/content-projection.js')), false);
   f.configure({ c4_db_cli: path.join(legacy, 'skills/comm-bridge/scripts/c4-db.js') });
-  const state = '{"last_result":null}\n'; fs.writeFileSync(path.join(f.env.ZYLOS_DATA_DIR, 'state.json'), state);
-  const child = f.fetch(EXTRACT, { ZYLOS_PACKAGE_ROOT: legacy }); assert.equal(child.status, 1);
-  const result = JSON.parse(child.stdout); assert.equal(result.status, 'error');
-  assert.match(result.error, /Projected C4 history requires a Core version with Dashboard conversation projection/);
-  assert.match(result.error, /cli\/lib\/content-projection\.js/);
-  assert.equal(result.conversations, undefined); assert.equal(child.stdout.includes(hidden), false);
+  f.env.ZYLOS_PACKAGE_ROOT = legacy;
+  const dir = path.join(f.root, 'baseline'); fs.mkdirSync(dir);
+  const archive = execFileSync('git', ['archive', 'v0.2.2', 'package.json', 'scripts/', 'references/methodology.md'], { cwd: ROOT, timeout: 5000 });
+  execFileSync('tar', ['-x', '-C', dir], { input: archive, timeout: 5000 });
+  const state = '{"last_result":null}\n';
+  fs.writeFileSync(path.join(f.env.ZYLOS_DATA_DIR, 'state.json'), state);
+  const current = f.fetch(), previous = f.fetch(path.join(dir, 'scripts/extract.js'));
+  assert.equal(current.status, 0, current.stderr);
+  assert.equal(previous.status, 0, previous.stderr);
+  const result = JSON.parse(current.stdout);
+  const previousResult = JSON.parse(previous.stdout);
+  assert.equal(result.conversations, previousResult.conversations);
+  assert.equal(result.methodology_file, path.join(ROOT, 'references/methodology.md'));
+  assert.equal(previousResult.methodology_file, path.join(dir, 'references/methodology.md'));
+  const { methodology_file: currentPath, ...currentFields } = result;
+  const { methodology_file: previousPath, ...previousFields } = previousResult;
+  assert.equal(JSON.stringify(currentFields), JSON.stringify(previousFields));
+  assert.equal(result.status, 'ready');
+  assert.equal(result.count, 6);
+  assert.ok(result.conversations.includes('ordinary legacy history'));
   assert.equal(fs.readFileSync(path.join(f.env.ZYLOS_DATA_DIR, 'state.json'), 'utf8'), state);
   assert.equal(fs.existsSync(f.patternsFile), false);
-});
-
-// Integration: missing-loader sentinel must never execute. Run for Core lookup
-// changes; skip unrelated rendering. No services; checked fixture, bounded child.
-test('unresolvable Core never calls an arbitrary raw recent reader', t => {
-  const f = fixture(t), marker = path.join(f.root, 'raw-read-called');
-  const script = path.join(f.root, 'raw-c4-db.js');
-  fs.writeFileSync(path.join(f.root, 'package.json'), '{"type":"module"}');
-  fs.writeFileSync(script, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, 'called'); console.log(${JSON.stringify(hidden)});`);
-  f.configure({ c4_db_cli: script });
-  const child = f.fetch(); assert.equal(child.status, 1);
-  assert.match(JSON.parse(child.stdout).error, /No history was read/);
-  assert.equal(child.stdout.includes(hidden), false); assert.equal(fs.existsSync(marker), false);
 });

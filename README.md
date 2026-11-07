@@ -27,28 +27,14 @@ The **methodology** is fixed and ships with the component. Everything scenario-s
 - Node.js 20+, provided by the Zylos runtime.
 - The Zylos `comm-bridge` and `scheduler` skills. All conversation access goes through the comm-bridge CLI; the component never opens the C4 database directly and does not need `sqlite3`.
 
-## Core Requirement
+## Core History Compatibility
 
-Requires a **Core version containing Dashboard conversation projection**
-(minimum release version: **TBD**, to be filled in at Core release). The
-integration baseline is Core `e3eaf512`, currently unreleased. Configure the
-matching Core `c4-db.js` for `c4_db_cli`. Before the first recent-history read,
-fetch uses that script's existing Core resolver to load public
-`cli/lib/content-projection.js`. If unavailable,
-it stops with a JSON error without reading conversation bodies or changing run
-state. Disabled/unconfigured runs continue to skip without reading history.
-
-Complete the matching comm-bridge skills synchronization when upgrading Core.
-A new Core package with stale skills is not sufficient: this check verifies
-package entry availability, not whether installed skills were synchronized.
-
-Core's `recent` output already projects complete messages. `max_page_bytes`
-measures that projected JSON page, including its metadata/JSON formatting; it
-does not measure the stored raw envelopes or only the final transcript body.
-The transcript uses the returned text unchanged, without a second projection,
-local envelope parser, raw fallback, new configuration switch or automatic
-disable state. Core resolution follows the existing `ZYLOS_PACKAGE_ROOT`,
-checkout, PATH and npm lookup rules.
+On Core versions with conversation projection, structured history messages
+appear as readable text. Earlier Core versions already provide plain-text
+history, so extraction works as usual with no minimum Core version requirement.
+The component measures the JSON page returned by Core, including metadata and
+formatting, then passes its text unchanged to the extraction agent without
+projecting it a second time.
 
 ## Install
 
@@ -149,15 +135,17 @@ npm test        # self-contained unit/release tests; no Core checkout or sqlite3
 npm run check   # syntax check of scripts and hooks
 ```
 
-The default tests create private minimal fake Core packages and comm-bridge
-CLIs. They need neither ZYLOS_PACKAGE_ROOT nor TEST_LEGACY_CORE_ROOT.
+The default tests create fake comm-bridge CLIs in private directories. They
+need neither ZYLOS_PACKAGE_ROOT nor TEST_LEGACY_CORE_ROOT.
 
 ## Projection Integration Tests
 
-These tests are opt-in and require sqlite3. Use a Core checkout at
-`e3eaf512cd11b92d250b03db90fda442133751e1` with its
+These tests are opt-in and require sqlite3. Use the current `multi-session/chat`
+Core checkout with its
 existing development dependencies and an older Core checkout at `6436b3e2`
-without the public projection module. Do not install either into a live instance.
+without the public projection module. Both checkouts need existing Core
+dependencies. The tests import the message prefix from the current Core schema.
+Do not install either into a live instance.
 Keep the component's `v0.2.2` Git tag available for the unchanged transcript
 baseline. Run with temporary HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR. Cases
 create private C4 databases and policy/pattern paths, and clean up their files;

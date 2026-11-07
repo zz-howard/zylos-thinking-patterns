@@ -5,7 +5,6 @@ import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { createFakeCore } from './helpers/core-fixture.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXTRACT = path.join(ROOT, 'scripts/extract.js');
@@ -43,7 +42,6 @@ function runNodeFailure(script, args = [], env = {}) {
 // mirrors the real c4-db.js: the N newest rows by timestamp, returned oldest
 // first, with content. This is the only C4 primitive the component uses.
 function createFakeC4(dir, rows) {
-  createFakeCore(dir);
   const fixturePath = path.join(dir, 'c4-rows.json');
   fs.writeFileSync(fixturePath, JSON.stringify(rows));
   const dbPath = path.join(dir, 'c4-db.js');
@@ -57,6 +55,7 @@ const newest = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? 1 : a.times
 newest.sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : a.id - b.id));
 console.log(JSON.stringify(newest, null, 2));
 `);
+  fs.writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}\n');
   return dbPath;
 }
 

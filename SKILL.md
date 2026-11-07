@@ -31,28 +31,14 @@ dependencies:
 
 The component mines conversations for decision moments and distills the ones that generalize into numbered pattern entries. The methodology is fixed and ships with the component (`references/methodology.md`). What is extracted, from where, into which file, how candidates are confirmed, and **when and how far back each run looks** are the **owner's** decisions, all written in one policy file. The script fetches a time window, applies the policy's channel filter and keeps run state; it never writes patterns. Judgment belongs to the agent.
 
-## Core Requirement
+## Core History Compatibility
 
-Requires a **Core version containing Dashboard conversation projection**
-(minimum release version: **TBD**, to be filled in at Core release). The
-integration baseline is Core `e3eaf512`, currently unreleased. Configure the
-matching Core `c4-db.js` for `c4_db_cli`. Before the first recent-history read,
-fetch uses that script's existing Core resolver to load public
-`cli/lib/content-projection.js`. If unavailable,
-it stops with a JSON error without reading conversation bodies or changing run
-state. Disabled/unconfigured runs continue to skip without reading history.
-
-Complete the matching comm-bridge skills synchronization when upgrading Core.
-A new Core package with stale skills is not sufficient: this check verifies
-package entry availability, not whether installed skills were synchronized.
-
-Core's `recent` output already projects complete messages. `max_page_bytes`
-measures that projected JSON page, including its metadata/JSON formatting; it
-does not measure the stored raw envelopes or only the final transcript body.
-The transcript uses the returned text unchanged, without a second projection,
-local envelope parser, raw fallback, new configuration switch or automatic
-disable state. Core resolution follows the existing `ZYLOS_PACKAGE_ROOT`,
-checkout, PATH and npm lookup rules.
+On Core versions with conversation projection, structured history messages
+appear as readable text. Earlier Core versions already provide plain-text
+history, so extraction works as usual with no minimum Core version requirement.
+The component measures the JSON page returned by Core, including metadata and
+formatting, then passes its text unchanged to the extraction agent without
+projecting it a second time.
 
 ## Owner Setup (once, after install)
 
