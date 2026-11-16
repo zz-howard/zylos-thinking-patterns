@@ -80,6 +80,7 @@ test('single-session paths, bootstrap cutoff and missing metadata are explicit',
   const run = collectMaterials(s.config, {}, s.options);
   assert.equal(run.session_files[0], log);
   assert.ok(run.inbound.every(r => r.id !== 1));
+  assert.throws(() => traceMaterials(s.config, {}, run, [{ session_group: '*', c4_id: 1, kind: 'correction' }]), /bootstrap cutoff/);
   delete s.data.rows[1].session_group; s.write();
   assert.throws(() => collectMaterials(s.config, {}, s.options), /session_group/);
 });
@@ -144,6 +145,10 @@ test('product CLI resumes deferred work, rejects unfinished commits and preserve
   invoke(['commit', '--run', first.run_id, '--groups', 'A', '--result', 'no_change']);
   assert.equal(invoke(['fetch']).completed_groups.join(','), 'A');
   invoke(['commit', '--run', first.run_id, '--result', 'no_change']);
+  const log = fs.readFileSync(path.join(s.env.ZYLOS_DATA_DIR, 'logs/runs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
+  assert.equal(log.report.inbound.count, 5);
+  assert.equal(log.trace_report.deferred, 0);
+  assert.equal(log.pending_clues, 0);
   assert.equal(invoke(['fetch']).reason, 'no_checkpoint_progress');
   s.data.checkpoints.push({ id: 3, session_group: 'B', end_conversation_id: 6 }); s.write();
   const tail = invoke(['fetch']);

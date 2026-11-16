@@ -302,9 +302,11 @@ function commandCommit(args) {
   const policy = normalizePolicyName(args.policy);
   let state = loadState();
   let finishedRun;
+  let materialRun;
   const runId = optional(args, 'run');
   if (runId) {
     const run = readRun(runId);
+    materialRun = run;
     const key = scopeKey(args);
     if (run.scope !== key || state.material_scopes?.[key]?.active_run !== runId) throw new Error('Run is no longer active for this task/policy');
     if (result !== 'skip') {
@@ -345,6 +347,9 @@ function commandCommit(args) {
     result,
     lookback,
     window_end: windowEnd,
+    report: materialRun?.report ?? {},
+    trace_report: materialRun?.trace_report ?? {},
+    pending_clues: nextState.material_scopes?.[scopeKey(args)]?.pending_clues?.length ?? 0,
     state_hash: crypto.createHash('sha256').update(JSON.stringify(nextState)).digest('hex')
   })}\n`);
 

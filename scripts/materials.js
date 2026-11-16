@@ -145,7 +145,10 @@ export function traceMaterials(config, state, run, clues = []) {
       if ((rows.filter(r => r.id < clue.c4_id).length >= settings.trace_context || begin === 1) && (rows.filter(r => r.id > clue.c4_id).length >= settings.trace_context || upper === end)) break;
       radius *= 2;
     }
-    if (!rows.some(row => row.id === clue.c4_id)) throw new Error('Clue source is absent or excluded');
+    const source = rows.find(row => row.id === clue.c4_id);
+    if (!source) throw new Error('Clue source is absent or excluded');
+    const bootstrapSince = run.ranges.find(range => range.session_group === clue.session_group).bootstrap_since;
+    if (bootstrapSince && epoch(source.timestamp) < epoch(bootstrapSince)) throw new Error('Clue source predates the bootstrap cutoff');
     rows = [...rows.filter(r => r.id < clue.c4_id).slice(-settings.trace_context), ...rows.filter(r => r.id === clue.c4_id), ...rows.filter(r => r.id > clue.c4_id).slice(0, settings.trace_context)].map(row => ({ ...row, content: stripWrappers(row.content) }));
     const trace = { clue, rows, report: measure(rows) };
     const size = Buffer.byteLength(JSON.stringify(trace));
