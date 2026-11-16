@@ -21,6 +21,7 @@ append-only pattern destination. Owner policy is never overwritten.
 Channel filters default to excluding `internal, system, void, multica` and
 never filter senders. Additional policies use `policy-<name>.md` and
 `--policy <name>`. Each policy/task owns independent checkpoint progress.
+Inbound collection also excludes stored content starting with `[Scheduled Task:` in both checkpoint and legacy modes; the marker elsewhere is retained and trace context is unchanged.
 
 Hooks register no scheduler tasks. Ask the owner for frequency, fallback
 lookback, task name and policy; print the exact registration command:

@@ -10,7 +10,7 @@ its data directory's `materials/<run UUID>.json`.
 | --- | --- |
 | `run_id`, `created_at`, `mode`, `time_zone` | UUID, ISO instant, `checkpoints`, owner's timezone |
 | `ranges` | `{session_group,after,end,checkpoint_id,begin_time,end_time}`; interval `(after,end]`; C4 times are UTC |
-| `filters` | `{channels:null or array,exclude_channels:array}`; reuse requires equal filters |
+| `filters` | `{channels:null or array,exclude_channels:array,exclude_scheduled_tasks:true}`; reuse requires equal filters |
 | `session_files`, `reference_files` | Paths only; no copied memory body |
 | `inbound` | Allowed-channel inbound C4 rows with current-message bodies and bracket-prefixed first lines retained; no-pair messages unchanged |
 | `clues` | `{session_group,c4_id,kind:"decision" or "correction",source_range}` plus optional prose; queued clues retain their original range |
@@ -24,6 +24,7 @@ until processed. Artifacts require local access and are never published.
 
 Identity-reflection reuses correction clues/traces only for exact matching
 completed group ranges and filters. Unmatched ranges are collected independently.
+Inbound collection rejects only stored content starting with `[Scheduled Task:` before wrapper extraction, including in legacy time-window mode. The marker elsewhere is retained. Trace context is unchanged. Older artifacts without `filters.exclude_scheduled_tasks: true` fail filter matching and are recollected.
 Reuse reads checkpoints but skips raw rows/memory for covered ranges; reporting
 distinguishes reuse. Callers must select the intended policy/task artifacts.
 

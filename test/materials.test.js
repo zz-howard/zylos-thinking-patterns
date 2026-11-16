@@ -25,6 +25,19 @@ function setup(t) {
   write();
   return { root, env, now, data, config, options, write };
 }
+test('checkpoint inbound excludes only messages beginning with the scheduled task marker', t => {
+  const s = setup(t);
+  s.data.rows[0].content = '[Scheduled Task: task-1 #1] machine prompt';
+  s.data.rows[1].content = 'quoted [Scheduled Task: task-1 #1] machine prompt';
+  s.write();
+  const run = collectMaterials(s.config, {}, s.options);
+  assert.ok(!run.inbound.some(row => row.id === 1));
+  assert.ok(run.inbound.some(row => row.id === 2));
+  assert.equal(run.filters.exclude_scheduled_tasks, true);
+  traceMaterials({ ...s.config, trace_context: 10 }, {}, run, [{ session_group: 'A', c4_id: 5, kind: 'decision' }]);
+  assert.ok(run.traces[0].rows.some(row => row.id === 1));
+});
+
 test('checkpoint ranges exclude unsynced tails and resume the next checkpoint', t => {
   const s = setup(t);
   const log = path.join(s.env.ZYLOS_DIR, 'memory/session-groups/A/sessions/2026-11-16.md');
@@ -151,6 +164,12 @@ test('completed matching artifacts reuse corrections without reading raw materia
   assert.ok(mismatch.report.reuse_misses.every(miss => miss.reason === 'filters_mismatch'));
   const unfinished = collectMaterials(s.config, {}, { ...s.options, reuse_artifacts: [{ ...run, trace_complete: false }] });
   assert.ok(unfinished.report.reuse_misses.every(miss => miss.reason === 'thinking_patterns_incomplete'));
+  const old = structuredClone(run);
+  delete old.filters.exclude_scheduled_tasks;
+  const oldFilters = collectMaterials(s.config, {}, { ...s.options, reuse_artifacts: [old] });
+  assert.equal(oldFilters.report.reused_ranges, 0);
+  assert.ok(oldFilters.report.reuse_misses.every(miss => miss.reason === 'filters_mismatch'));
+  assert.equal(oldFilters.inbound.length, run.inbound.length);
 });
 test('retention preserves unfinished artifacts and cleans only committed expired runs', t => {
   const s = setup(t), run = collectMaterials(s.config, {}, s.options);
@@ -191,6 +210,7 @@ test('product CLI carries deferred work into a new run with checkpoint progress'
     return JSON.parse(child.stdout);
   };
   const first = invoke(['fetch']);
+  assert.equal(first.filters.exclude_scheduled_tasks, true);
   assert.equal(invoke(['fetch']).run_id, first.run_id);
   const clues = path.join(s.root, 'clues.json');
   fs.writeFileSync(clues, JSON.stringify([{ session_group: 'A', c4_id: 5, kind: 'decision' }, { session_group: 'B', c4_id: 4, kind: 'correction' }]));

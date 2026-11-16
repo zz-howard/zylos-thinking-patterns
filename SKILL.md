@@ -51,7 +51,7 @@ Installation creates the data directory with a policy **template**. Until the ow
    ```
    Two lines of the policy are machine-read, each only inside its own section (the same words under any other heading are prose); everything else is prose for you:
    - `## Target` → `Patterns file: <path>` — the only file the workflow may write. Without this line every run skips as `unconfigured`. If the file already contains numbered entries in the methodology's format, extraction continues from its highest number.
-   - `## Sources` → `Channels: all|<list>` and `Exclude channels: <list>|none` filter C4 channels. The default excludes `internal, system, void, multica`. Scripts never filter senders or classify words.
+   - `## Sources` → `Channels: all|<list>` and `Exclude channels: <list>|none` filter C4 channels. The default excludes `internal, system, void, multica`. Inbound collection also excludes stored content starting with `[Scheduled Task:` in checkpoint and legacy modes, leaving trace context unchanged. Scripts never filter senders or classify words.
 2. Optionally adjust `trace_max_clues` (15), `trace_context` (10 messages each side), `trace_max_bytes` (512000), `artifact_retention_days` (7), and `max_page_bytes` (64 MiB). `min_conversations`, `max_conversations` and `default_lookback` apply only to fallback. The target file remains in policy.
 3. Register the schedule — see the next section.
 

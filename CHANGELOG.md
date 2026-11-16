@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Actions After Upgrading
+- Check `## Sources` in `~/zylos/components/thinking-patterns/policy.md`. If it explicitly says `Exclude channels: system, void` (the old template default), change it to `Exclude channels: internal, system, void, multica`, or delete that line to use the new default. Keep the old value only if you intentionally want internal messages and Multica reports. Otherwise, internal messages and development-agent reports will enter the material in large volumes. Upgrade hooks do not rewrite your policy.
+- Existing thinking-patterns scheduled tasks need no changes. Their prompts still tell the agent to read `SKILL.md`, which is updated with the component.
+
 ### Changed
+- Exclude messages whose stored content starts with `[Scheduled Task:` from checkpoint inbound material and legacy time-window collection. Mark the checkpoint filter in shared artifacts so older artifacts are recollected rather than reused. Trace context is unchanged.
 - Publish validated pattern drafts through Core's locked replacement writer, with explicit direct fallback reasons and no progress advance after a rejected write.
 - Collect checkpoint-covered material per group from memory paths and a channel-filtered inbound net, with explicit legacy Core fallback.
 - Persist agent-selected decision/correction clues and bounded same-group traces for identity-reflection reuse; advance completed groups only.

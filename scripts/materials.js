@@ -95,6 +95,7 @@ export function collectMaterials(config, state = {}, options = {}) {
   const list = Array.isArray(groups) ? groups : groups.groups;
   if (!Array.isArray(list)) throw unsupported('groups_unsupported', 'C4 groups response unsupported');
   const ranges = [], inbound = [], sessions = new Set(), reused = [], reuseMisses = [];
+  const filters = { channels: options.channels ?? null, exclude_channels: options.exclude_channels ?? ['internal', 'system', 'void', 'multica'], exclude_scheduled_tasks: true };
   let bootstrapRows;
   for (const entry of list) {
     const group = typeof entry === 'string' ? entry : entry.sessionGroup ?? entry.session_group;
@@ -112,7 +113,7 @@ export function collectMaterials(config, state = {}, options = {}) {
     if (end <= after) continue;
     const range = { session_group: group, after, end, checkpoint_id: latest.id };
     // Reuse only an exact range whose trace is complete and filters match.
-    const cached = (options.reuse_artifacts ?? []).find(a => a.trace_complete && JSON.stringify(a.filters) === JSON.stringify({ channels: options.channels ?? null, exclude_channels: options.exclude_channels ?? ['internal', 'system', 'void', 'multica'] }) && a.ranges?.some(r => r.session_group === group && r.after === after && r.end === end));
+    const cached = (options.reuse_artifacts ?? []).find(a => a.trace_complete && JSON.stringify(a.filters) === JSON.stringify(filters) && a.ranges?.some(r => r.session_group === group && r.after === after && r.end === end));
     if (cached) { ranges.push(range); reused.push({ range, clues: cached.clues.filter(c => c.session_group === group && c.kind === 'correction'), traces: cached.traces.filter(t => t.clue.session_group === group && t.clue.kind === 'correction') }); continue; }
     if (options.reuse_artifacts) {
       const candidates = options.reuse_artifacts.filter(a => a.ranges?.some(r => r.session_group === group && r.after === after && r.end === end));
@@ -130,13 +131,13 @@ export function collectMaterials(config, state = {}, options = {}) {
     range.end_time = rows.at(-1)?.timestamp ?? null;
     ranges.push(range);
     for (const file of memoryFiles(root, group, rows, zone)) sessions.add(file);
-    inbound.push(...rows.filter(row => row.direction === 'in' && allowed(row, options)).map(row => ({ ...row, content: stripWrappers(row.content) })));
+    inbound.push(...rows.filter(row => row.direction === 'in' && allowed(row, options) && !String(row.content ?? '').startsWith('[Scheduled Task:')).map(row => ({ ...row, content: stripWrappers(row.content) })));
   }
   const references = ranges.length && reused.length !== ranges.length ? changedFiles(root, Date.parse(state.last_material_at ?? new Date(now - 86400000).toISOString()), now) : [];
   const sessionFiles = [...sessions];
   const fileReport = files => ({ count: files.length, bytes: files.reduce((n, file) => n + fs.statSync(file).size, 0), characters: files.reduce((n, file) => n + [...fs.readFileSync(file, 'utf8')].length, 0) });
   return { schema_version: 1, run_id: crypto.randomUUID(), mode: 'checkpoints', created_at: new Date(now).toISOString(), time_zone: zone, ranges, session_files: sessionFiles, reference_files: references, inbound, reused,
-    filters: { channels: options.channels ?? null, exclude_channels: options.exclude_channels ?? ['internal', 'system', 'void', 'multica'] },
+    filters,
     report: { inbound: measure(inbound), sessions: fileReport(sessionFiles), references: fileReport(references), reused_ranges: reused.length, reuse_misses: reuseMisses }, clues: [], traces: [], trace_complete: false };
 }
 export function traceMaterials(config, state, run, clues = []) {

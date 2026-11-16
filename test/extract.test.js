@@ -21,6 +21,7 @@ function runNode(script, args = [], env = {}) {
     cwd: ROOT,
     env: { ...process.env, ...env },
     encoding: 'utf8',
+    timeout: 15000,
     maxBuffer: 64 * 1024 * 1024 // the harness must not be the bottleneck the inbound-buffer test probes
   });
 }
@@ -101,7 +102,7 @@ function setup(rows, config = {}) {
   const dataDir = path.join(dir, 'data');
   const dbPath = createFakeC4(dir, rows);
   const patternsFile = path.join(dir, 'patterns.md');
-  writeConfig(dataDir, { min_conversations: 2, c4_db_cli: dbPath, ...config });
+  writeConfig(dataDir, { min_conversations: 2, c4_db_cli: dbPath, c4_fetch_cli: dbPath, ...config });
   writeConfiguredPolicy(dataDir, patternsFile);
   return { dir, dataDir, patternsFile, env: { ZYLOS_DATA_DIR: dataDir } };
 }
@@ -801,6 +802,21 @@ test('fetch excludes system and void channels by default and reports filtered_ou
   assert.match(result.conversations, /\(lark:1\)/);
   assert.doesNotMatch(result.conversations, /\(system:1\)/);
   assert.doesNotMatch(result.conversations, /\(void:1\)/);
+});
+
+test('legacy fetch excludes only messages beginning with the scheduled task marker', t => {
+  const rows = makeRows([10, 9]);
+  rows[0].content = '[Scheduled Task: task-1 #1] machine prompt';
+  rows[1].direction = 'in';
+  rows[1].content = 'quoted [Scheduled Task: task-1 #1] retained';
+  const { dir, env } = setup(rows, { min_conversations: 1, c4_fetch_cli: '/missing-checkpoint-cli' });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+  assert.equal(result.mode, 'legacy_time_window');
+  assert.equal(result.count, 1);
+  assert.equal(result.filtered_out, 1);
+  assert.match(result.conversations, /quoted \[Scheduled Task:/);
+  assert.doesNotMatch(result.conversations, /machine prompt/);
 });
 
 test('fetch applies the policy Channels include list', () => {

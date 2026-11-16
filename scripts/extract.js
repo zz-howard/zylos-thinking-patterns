@@ -218,7 +218,7 @@ function commandLegacyFetch(args, fallbackReason) {
   const inWindow = read.rows.filter(row => row._ms >= beginMs && row._ms <= endMs);
   const include = policy.channels === null ? null : new Set(policy.channels);
   const exclude = new Set(policy.exclude_channels);
-  const inScope = inWindow.filter(row => (include === null || include.has(row.channel)) && !exclude.has(row.channel));
+  const inScope = inWindow.filter(row => (include === null || include.has(row.channel)) && !exclude.has(row.channel) && !String(row.content ?? '').startsWith('[Scheduled Task:'));
   const capped = inScope.length > maxConversations;
   // Rows are oldest-first; when capping, keep the newest and leave out the oldest.
   const rows = capped ? inScope.slice(inScope.length - maxConversations) : inScope;
@@ -284,7 +284,7 @@ function commandFetch(args) {
     }
   }
   const ready = run.ranges.length > 0 || scope.pending_clues?.length > 0;
-  outputJson({ status: ready ? 'ready' : 'skip', reason: ready ? null : 'no_checkpoint_progress', ...run, completed_groups: scope.completed_groups ?? [], ...policySummary(policy), methodology_file: METHODOLOGY_PATH, state_file: STATE_PATH, artifact_file: ready ? materialFile(run.run_id) : null });
+  outputJson({ status: ready ? 'ready' : 'skip', reason: ready ? null : 'no_checkpoint_progress', ...run, completed_groups: scope.completed_groups ?? [], ...policySummary(policy), filters: run.filters, methodology_file: METHODOLOGY_PATH, state_file: STATE_PATH, artifact_file: ready ? materialFile(run.run_id) : null });
 }
 function commandTrace(args) {
   const run = readRun(optional(args, 'run'));
