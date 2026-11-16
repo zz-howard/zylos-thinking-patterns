@@ -153,6 +153,17 @@ test('skipping a deferred write allows a fresh run to commit without publication
   assert.equal(fs.readFileSync(f.patterns, 'utf8'), ORIGINAL);
 });
 
+// Guard lifecycle: required for skip/guard changes, otherwise skippable; private fixture only.
+test('a skip that leaves the run active keeps the deferred-write guard', t => {
+  const f = fixture(t);
+  assert.equal(f.write(ORIGINAL + NEW_ENTRY, hash('stale bytes')).status, 'write_deferred');
+  assert.equal(f.commit('skip', false).status, 'committed');
+  assert.equal(f.state().material_scopes['default:daily'].active_run, RUN);
+  assert.equal(f.state().material_scopes['default:daily'].write_pending, RUN);
+  assert.equal(f.commit('no_change').status, 'error');
+  assert.equal(f.state().material_scopes['default:daily'].groups[GROUP].end_conversation_id, 10);
+});
+
 // Active-run resume: required for fetch/guard changes, otherwise skippable; private fixture only.
 test('fetch resumes an active deferred run and preserves its publication guard', t => {
   const f = fixture(t);

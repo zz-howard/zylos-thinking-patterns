@@ -331,7 +331,7 @@ function commandCommit(args) {
   let state = loadState();
   const scope = state.material_scopes?.[scopeKey(args)];
   const pending = scope?.write_pending;
-  if (result !== 'skip' && pending && (pending === true || pending === (optional(args, 'run') ?? scope.active_run ?? 'legacy'))) throw new Error('Pattern write is pending; progress cannot advance until writing succeeds or this run is skipped');
+  if (result !== 'skip' && pending && pending === (optional(args, 'run') ?? scope.active_run ?? 'legacy')) throw new Error('Pattern write is pending; progress cannot advance until writing succeeds or this run is skipped');
   let finishedRun;
   let materialRun;
   const runId = optional(args, 'run');
@@ -362,7 +362,8 @@ function commandCommit(args) {
   } else if (state.material_scopes?.[scopeKey(args)]?.active_run && result !== 'skip') {
     throw new Error('Checkpoint commit requires --run from fetch');
   }
-  if (result === 'skip' && scope) delete scope.write_pending;
+  // Only a skip that closes the run (or a run-less fallback) releases the guard.
+  if (result === 'skip' && scope && !scope.active_run) delete scope.write_pending;
   const now = new Date().toISOString();
   const windowEnd = optional(args, 'window-end');
   const lookback = optional(args, 'lookback');

@@ -78,6 +78,6 @@ blocked within that run until successful retry; on conflict reread and merge bef
 Direct writing reports `file_missing`, `outside_memory`, or `writer_unavailable`.
 A writer rejection never enables direct fallback. No-change/updated commits are
 refused while a write is pending for that run. The guard stores its initiating
-run ID (or `legacy` for time-window fallback). Skip clears it without advancing.
+run ID (or `legacy` for time-window fallback). Skip that closes the run (`--run`) clears it without advancing.
 Fetch resumes an active run with its guard, but clears abandoned guards when
 starting a new run. Writing alone does not advance checkpoint ranges.
