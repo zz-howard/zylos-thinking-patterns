@@ -17,7 +17,11 @@ confirmation, notifications and append-only boundaries remain owner policy.
    bracket-prefixed first lines; leave messages without that pair unchanged.
 5. The agent selects decision and correction clues. `trace` retrieves only the
    source group, including replies, under clue/context/byte limits.
-6. Deferred clues and the active run persist. Commit advances only completed
+6. The agent prepares an append-only pattern draft. The explicit write command
+   validates existing content and uses Core's hash/lock replacement writer for
+   existing files under memory. A busy or conflicting write blocks progress;
+   missing files, outside-memory targets and old Core report direct-write mode.
+7. Deferred clues and the active run persist. Commit advances only completed
    ranges. Identity-reflection can reuse matching completed artifacts.
 
 `scripts/materials.js` is dependency-free and copied verbatim to

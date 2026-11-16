@@ -48,9 +48,11 @@ negative controls intact — a gate that cannot fail proves nothing.
 
 ## Component-Specific Rules
 
-- **Owner's files are never rewritten by code.** `policy.md` is owner prose;
+- **Existing owner prose is preserved.** `policy.md` is owner prose;
   the target pattern file is named by the policy's `Patterns file:` line and is
-  only ever appended to by the extraction subagent, never by a script or hook.
+  only extended with new entries or Reinforced blocks. The extraction subagent
+  prepares drafts; the explicit write command validates and publishes them using
+  Core's locked replacement writer when available. Hooks never change it.
 - **Hooks are idempotent by construction.** `post-install` / `post-upgrade`
   merge new defaults into `config.json` and normalize `state.json`, writing
   only when the merged content differs from what is on disk. `pre-upgrade`

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // thinking-patterns CLI: checkpoint materials, explicit legacy fetch and run state.
 // It never reads c4.db directly — every C4 access goes through the comm-bridge CLI
-// — and it never writes the pattern file. Judgment belongs to the agent.
+// Pattern proposals are published only through the explicit write command.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -9,8 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { collectMaterials, traceMaterials, commitMaterials, saveArtifact, materialFailureReason } from './materials.js';
+import { writePatterns } from './pattern-write.js';
 import {
-  DATA_DIR, CONFIG_PATH, STATE_PATH, LOG_DIR, RUN_LOG_PATH, METHODOLOGY_PATH,
+  ZYLOS_DIR, DATA_DIR, CONFIG_PATH, STATE_PATH, LOG_DIR, RUN_LOG_PATH, METHODOLOGY_PATH,
   DEFAULT_CONFIG, SCHEDULE_QUESTIONS, POLICY_TEMPLATE,
   atomicWriteJson, ensureDir, expandHome, formatLocalTimestamp, formatTranscript, inspectPatternsFile,
   loadConfig, loadState, localTimeZone, normalizePolicyName, normalizeTaskName, parseC4Timestamp, parseDuration, readPolicy,
@@ -295,6 +296,26 @@ function commandTrace(args) {
   outputJson({ status: 'ready', run_id: run.run_id, trace_complete: run.trace_complete, traces: run.traces, report: run.trace_report, artifact_file: materialFile(run.run_id) });
 }
 
+function commandWrite(args) {
+  const policy = readPolicy(normalizePolicyName(args.policy));
+  if (policy.unconfigured || !policy.patterns_file) throw new Error('Pattern policy is unconfigured');
+  const file = optional(args, 'file'), sha256 = optional(args, 'sha256');
+  if (!file || !/^[a-f0-9]{64}$/.test(sha256 ?? '')) throw new Error('write requires --file and raw-byte --sha256');
+  const state = loadState(), key = scopeKey(args), scope = state.material_scopes?.[key] ?? {};
+  const runId = optional(args, 'run');
+  if (scope.active_run && runId !== scope.active_run) throw new Error('Pattern write requires the active --run');
+  if (runId && (readRun(runId).scope !== key || scope.active_run !== runId)) throw new Error('Run is no longer active for this task/policy');
+  // Persist refusal before invoking a writer so interrupted writes cannot advance.
+  scope.write_pending = true;
+  state.material_scopes = { ...state.material_scopes, [key]: scope };
+  atomicWriteJson(STATE_PATH, state);
+  const result = writePatterns({ target: path.resolve(expandHome(policy.patterns_file)), file,
+    sha256, writer: expandHome(loadConfig().memory_writer), memoryRoot: path.join(ZYLOS_DIR, 'memory') });
+  if (result.status === 'updated') delete scope.write_pending;
+  atomicWriteJson(STATE_PATH, state);
+  outputJson(result);
+}
+
 function commandCommit(args) {
   const result = args.result;
   if (!['skip', 'no_change', 'updated'].includes(result)) {
@@ -303,6 +324,7 @@ function commandCommit(args) {
   const task = normalizeTaskName(args.task);
   const policy = normalizePolicyName(args.policy);
   let state = loadState();
+  if (result !== 'skip' && state.material_scopes?.[scopeKey(args)]?.write_pending) throw new Error('Pattern write is pending; progress cannot advance until writing succeeds');
   let finishedRun;
   let materialRun;
   const runId = optional(args, 'run');
@@ -421,13 +443,14 @@ function main() {
   try {
     if (command === 'fetch') commandFetch(args);
     if (command === 'trace') commandTrace(args);
+    if (command === 'write') commandWrite(args);
     if (command === 'commit') commandCommit(args);
     if (command === 'inspect') commandInspect(args);
     if (command === 'status') commandStatus(args);
     if (command === 'template') commandTemplate(args);
     outputJson({
       status: 'error',
-      error: 'Usage: extract.js fetch [--lookback 24h] [--task name] [--policy name] | trace --run UUID [--clues file.json] [--task name] [--policy name] | commit --result <skip|no_change|updated> [--run UUID] [--groups G,H] [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS +HH:MM"] | inspect [--policy name] | status [--policy name] | template [--policy | --policy name] [--lookback 24h] [--task name] [--cron "50 23 * * *"] [--json]'
+      error: 'Usage: extract.js fetch [--lookback 24h] [--task name] [--policy name] | trace --run UUID [--clues file.json] [--task name] [--policy name] | write --file DRAFT --sha256 HASH [--run UUID] [--task name] [--policy name] | commit --result <skip|no_change|updated> [--run UUID] [--groups G,H] [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS +HH:MM"] | inspect [--policy name] | status [--policy name] | template [--policy | --policy name] [--lookback 24h] [--task name] [--cron "50 23 * * *"] [--json]'
     }, 1);
   } catch (err) {
     outputError(err.message);

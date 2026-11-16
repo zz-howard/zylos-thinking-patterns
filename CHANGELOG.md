@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Publish validated pattern drafts through Core's locked replacement writer, with explicit direct fallback reasons and no progress advance after a rejected write.
 - Collect checkpoint-covered material per group from memory paths and a channel-filtered inbound net, with explicit legacy Core fallback.
 - Persist agent-selected decision/correction clues and bounded same-group traces for identity-reflection reuse; advance completed groups only.
 - Preserve shared artifacts across upgrades; retain completed artifacts seven days by default and resume deferred clues.

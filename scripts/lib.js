@@ -34,6 +34,7 @@ export const DEFAULT_CONFIG = {
   default_lookback: '24h',
   c4_db_cli: `${ZYLOS_DIR_DISPLAY}/.claude/skills/comm-bridge/scripts/c4-db.js`,
   c4_fetch_cli: `${ZYLOS_DIR_DISPLAY}/.claude/skills/comm-bridge/scripts/c4-fetch.js`,
+  memory_writer: `${ZYLOS_DIR_DISPLAY}/.claude/skills/zylos-memory/scripts/memory-write.js`,
   trace_max_clues: 15,
   trace_context: 10,
   trace_max_bytes: 512000,

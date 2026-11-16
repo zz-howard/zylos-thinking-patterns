@@ -114,9 +114,24 @@ Outer layer, in the main session:
    - A `Related patterns` item is either an entry reference — `#N (title) — how it relates`, written from this entry toward the target, number required — or a concept item (a principle or idea that has no entry, e.g. `Whitelist over blacklist`). Never refer to an entry by title alone: the lint reports every number-less item that reads as a reference (opens with `Connects to` / `See` / `Extends` / `Inverse of` …, uses the explicit `Pattern (title)` form, or names an existing entry's title — one or several; naming two titles still reports, it just locates nothing).
    - A Reinforced block is a paragraph starting at the line start as `**Reinforced (YYYY-MM-DD)**: ` — the date alone inside the parentheses (no `Day N`, no time or place qualifier: those go into the text), never a list bullet, never another label such as `Reinforcing event` or `Reinforcement`. The lint reports every header that reads as a reinforcement but is not this shape.
 6. Write according to the policy's **Confirmation** mode:
-   - *record and notify*: append new entries and Reinforced blocks to the pattern file, then send the run summary to the policy's **Notification** endpoint.
-   - *ask me first*: do not touch the pattern file. Send the candidates (title, tag, one-line principle, source event) to the notification endpoint and stop; the owner's approval arrives as a normal message, and whoever handles it appends the approved entries by hand.
-   - *record silently*: append; send nothing.
+   - *record and notify*: prepare a full replacement containing only appended new entries and Reinforced blocks, publish through the command below, then send the run summary to the policy's **Notification** endpoint.
+   - *ask me first*: do not touch the pattern file. Send the candidates (title, tag, one-line principle, source event) to the notification endpoint and stop; the owner's approval arrives as a normal message, and whoever handles it publishes the approved draft through the write command below.
+   - *record silently*: publish through the same write command; send nothing.
+   Read the entire current pattern file and hash its raw bytes (SHA256 of empty
+   bytes if absent). Prepare a separate draft; never edit the destination directly:
+   ```bash
+   node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js write --file <draft> --sha256 <hash> --run <run_id> --task daily [--policy <name>]
+   ```
+   Omit `--run` only in legacy fallback mode. Existing files under memory use
+   Core's locked replacement writer, not append mode. Missing targets, targets
+   outside memory, or a missing writer use direct writing and report respectively
+   `file_missing`, `outside_memory`, or `writer_unavailable`. Include mode/reason
+   in the summary. On `SYNC_BUSY`/`LOCK_TIMEOUT`, leave the file and progress
+   unchanged and retry next run; do not commit these ranges. On `MEMORY_CONFLICT`,
+   reread the full file, merge the draft again and retry with the new raw hash.
+   Other writer errors also defer; never bypass a writer rejection with direct
+   writing. Failed/interrupted writes block non-skip commits until a successful
+   write. A skip advances no ranges.
    Whenever a run summary is sent, end it with one line from `patterns.lint.summary`, e.g. `lint: 31 Type outside the six, 6 possible compound Domain (owner check), 7 Related references without #N (124 concept items), 0 dangling, 0 Reinforced headers off format` — so drift in the file stays visible to the owner. The lint reports; it never edits the file, and neither does this workflow beyond appending.
 7. Commit only fully processed ranges. Checkpoint mode requires `--run <run_id>` and optionally `--groups <comma-separated-groups>`; without `--groups`, all remaining ranges are completed. `skip` never advances progress. Fallback commits retain `--lookback` and `--window-end`. Use the same task/policy:
    - pattern file changed: `commit --result updated ...`
@@ -135,6 +150,7 @@ Outer layer, in the main session:
 ```bash
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js fetch [--lookback 24h] [--task name] [--policy name]
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js trace --run UUID [--clues file.json] [--task name] [--policy name]
+node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js write --file draft.md --sha256 HASH [--run UUID] [--task name] [--policy name]
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js commit --result skip|no_change|updated [--run UUID] [--groups G,H] [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS +HH:MM"]
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js inspect [--policy name]     # policy filters + pattern file: entry count, next number, Domain/Type distribution
 node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js status [--policy name]      # config + state + policy + patterns

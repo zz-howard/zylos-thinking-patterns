@@ -64,3 +64,18 @@ OM-RUN headers, plus unchanged plain text and unknown surrounding wrappers.
 This rule follows the approved observation that all 247 wrapped Telegram and
 OpenMax messages in the reviewed day contained current-message; no fixed
 wrapper vocabulary is needed.
+
+## Pattern Writes
+
+`extract.js write --file DRAFT --sha256 RAW_HASH --run RUN` publishes the policy's
+pattern destination only. Use the same task/policy as fetch/trace/commit. Drafts
+preserve all existing entry content, extending entries only with canonical
+Reinforced blocks and appending consecutively numbered new entries. Existing
+memory files use Core's replacement writer with a relative path, expected raw
+hash and full draft bytes on stdin. The writer handles the memory lock and Sync
+marker. Busy/timeout/conflict/error returns `write_deferred` and leaves commit
+blocked until successful retry; on conflict reread and merge before retrying.
+Direct writing reports `file_missing`, `outside_memory`, or `writer_unavailable`.
+A writer rejection never enables direct fallback. No-change/updated commits are
+refused while a write is pending; skip never advances. Writing alone does not
+advance checkpoint ranges.
