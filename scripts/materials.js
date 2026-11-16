@@ -29,11 +29,10 @@ export function cliJson(script, args, maxBytes = MATERIAL_DEFAULTS.max_page_byte
 }
 export function stripWrappers(content) {
   const text = String(content ?? '');
-  // Adapter headers/signatures precede structural context; human text is escaped.
-  const header = text.match(/^(?:(?:\[OM-RUN [^\]\n]+\] )?\[OPENMAX (?:DM|GROUP[^\]\n]*|THREAD[^\]\n]*)\][^\n]*\n|\[TG (?:DM|GROUP:[^\]\n]*)\][^<\n]*\s*)/)?.[0] ?? '';
-  const current = text.slice(header.length).match(/^(?:(?:<(smart-mode|group-context|thread-context|replying-to|openmax-instruction|quoted-excerpt|work-references|connector-preference)\b[^>]*>[\s\S]*?<\/\1>|<(?:org-context|message-context|sender-context|interaction-receipt|wf-context)\b[^>]*\/>)\s*)*<current-message>\s*([\s\S]*?)\s*<\/current-message>((?: ---- (?:file|image|artifact_id):[\s\S]*)?)$/);
-  const decode = value => value.replace(/&(lt|gt|amp|quot|apos);/g, (_, key) => ({ lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" })[key]);
-  return current ? decode(header + current[2] + current[3]) : text;
+  const current = /<current-message>([\s\S]*?)<\/current-message>/.exec(text);
+  if (!current) return text;
+  const firstLine = text.split(/\r?\n/, 1)[0];
+  return (firstLine.startsWith('[') ? firstLine + '\n' : '') + current[1].trim();
 }
 function unsupported(code, message) { const error = new Error(message); error.code = code; return error; }
 export function materialFailureReason(error) {

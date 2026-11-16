@@ -12,7 +12,7 @@ its data directory's `materials/<run UUID>.json`.
 | `ranges` | `{session_group,after,end,checkpoint_id,begin_time,end_time}`; interval `(after,end]`; C4 times are UTC |
 | `filters` | `{channels:null or array,exclude_channels:array}`; reuse requires equal filters |
 | `session_files`, `reference_files` | Paths only; no copied memory body |
-| `inbound` | Allowed-channel inbound C4 rows with adapter wrappers stripped; signatures preserved |
+| `inbound` | Allowed-channel inbound C4 rows with current-message bodies and bracket-prefixed first lines retained; no-pair messages unchanged |
 | `clues` | `{session_group,c4_id,kind:"decision" or "correction",source_range}` plus optional prose; queued clues retain their original range |
 | `traces` | `{clue,rows,report}`; same-group allowed-channel context including replies |
 | `trace_complete` | True after clue selection and all queued traces finish; empty selection still requires trace |
@@ -52,15 +52,15 @@ omits `--group` because current Core rejects an explicit wildcard.
 
 ## Wrapper Evidence
 
-Telegram `src/lib/context.js:205-241` emits the `[TG DM]` or
-`[TG GROUP:...]` header and sender signature before `group-context` or
-`thread-context`, optional `replying-to` and `smart-mode`, then
-`current-message` and optional trailing ` ---- file:`.
-OpenMax `src/lib/message.js:218-254,302-366` instead emits its header,
-self-closing `org-context`, `message-context`, and `sender-context`,
-an `openmax-instruction` block, optional conversation context, and the
-sender signature inside `current-message`. Its activity marker may prefix
-the header. Optional connector, workflow, quote and work-reference context
-are structural too. The collector preserves the header, sender, current body
-and trailing media, removes those structural blocks, and decodes the five XML
-entities once. Plain text outside a complete envelope is unchanged.
+Use one channel-independent rule for inbound material and traced rows. If a
+complete `<current-message>...</current-message>` pair exists anywhere in the
+message, retain only its inner body. If the first line starts with `[`, retain
+that first line before the body. Without a complete pair, return the message
+unchanged. Do not recognize individual context tags or channel names. The body
+keeps its stored text; context and media outside the pair are not retained.
+
+Real adapter-shaped fixtures cover Telegram group, Telegram DM and OpenMax
+OM-RUN headers, plus unchanged plain text and unknown surrounding wrappers.
+This rule follows the approved observation that all 247 wrapped Telegram and
+OpenMax messages in the reviewed day contained current-message; no fixed
+wrapper vocabulary is needed.

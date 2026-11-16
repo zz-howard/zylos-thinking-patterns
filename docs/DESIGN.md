@@ -13,7 +13,8 @@ confirmation, notifications and append-only boundaries remain owner policy.
 3. Find session logs in Core memory directories, using owner `TZ`. List decision
    pages and preferences modified since the previous material run.
 4. Provide allowed-channel inbound rows as the original-message net. No sender
-   filtering or keyword heuristics. Recognized adapter wrappers are removed.
+   filtering or keyword heuristics. Extract current-message bodies and preserve
+   bracket-prefixed first lines; leave messages without that pair unchanged.
 5. The agent selects decision and correction clues. `trace` retrieves only the
    source group, including replies, under clue/context/byte limits.
 6. Deferred clues and the active run persist. Commit advances only completed

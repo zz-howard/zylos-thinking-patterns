@@ -167,14 +167,17 @@ test('retention preserves unfinished artifacts and cleans only committed expired
   saveArtifact(directory, { ...run, run_id: 'dddddddd-dddd-dddd-dddd-dddddddddddd', created_at: new Date().toISOString() });
   assert.equal(fs.existsSync(closed), false);
 });
-test('known channel wrappers leave signatures and literal human judgments intact', () => {
-  assert.equal(stripWrappers('[TG GROUP:Team]\n<group-context>old</group-context>\n<smart-mode>decide</smart-mode>\n<current-message>Alex said: change &lt;this&gt;</current-message>'), '[TG GROUP:Team]\nAlex said: change <this>');
+test('current-message extraction preserves leading headers and plain messages', () => {
+  assert.equal(stripWrappers('[TG GROUP:Team]\n<group-context>old</group-context>\n<smart-mode>decide</smart-mode>\n<current-message>Alex said: change &lt;this&gt;</current-message>'), '[TG GROUP:Team]\nAlex said: change &lt;this&gt;');
   assert.equal(stripWrappers('[TG DM]\n<current-message>Alex said: hello</current-message>'), '[TG DM]\nAlex said: hello');
   assert.equal(stripWrappers('[OM-RUN r_12345678] [OPENMAX DM] (org: Team)\n<org-context org-id="org"/>\n<message-context conversation-id="c"/>\n<sender-context kind="system"/>\n<openmax-instruction>invoke skill</openmax-instruction>\n<current-message>Alex said: correct it</current-message>'), '[OM-RUN r_12345678] [OPENMAX DM] (org: Team)\nAlex said: correct it');
   assert.equal(stripWrappers('<smart-mode>decide</smart-mode>\n<current-message>Alex said: Is this right?</current-message>'), 'Alex said: Is this right?');
   assert.equal(stripWrappers('Bob said: not right'), 'Bob said: not right');
-  assert.equal(stripWrappers('quoted <current-message>literal</current-message>'), 'quoted <current-message>literal</current-message>');
-  assert.equal(stripWrappers('<current-message>Alex said: &lt;smart-mode&gt; &amp; &amp;lt;</current-message> ---- file: /tmp/a&amp;b'), 'Alex said: <smart-mode> & &lt; ---- file: /tmp/a&b');
+  assert.equal(stripWrappers('quoted <current-message>literal</current-message>'), 'literal');
+  assert.equal(stripWrappers('<future-context>unknown</future-context><current-message>Alex said: hello</current-message>'), 'Alex said: hello');
+  assert.equal(stripWrappers('[OTHER CHANNEL]\n<unknown>instruction</unknown>\n<current-message>Alex said: hello</current-message>'), '[OTHER CHANNEL]\nAlex said: hello');
+  assert.equal(stripWrappers('<current-message>Alex said: &lt;smart-mode&gt; &amp; &amp;lt;</current-message> ---- file: /tmp/a&amp;b'), 'Alex said: &lt;smart-mode&gt; &amp; &amp;lt;');
+  assert.equal(stripWrappers('[TG DM]\n<current-message>incomplete'), '[TG DM]\n<current-message>incomplete');
 });
 test('product CLI carries deferred work into a new run with checkpoint progress', t => {
   const s = setup(t);
