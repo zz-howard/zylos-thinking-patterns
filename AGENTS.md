@@ -40,9 +40,8 @@ negative controls intact — a gate that cannot fail proves nothing.
 - `npm test` explicitly runs `test/extract.test.js` and `test/release-consistency.test.js`; `npm run check` syntax-checks scripts and hooks
 - `npm run test:integration` runs `test/projected-history.test.js` with the real Core checkouts and private databases described in README.md
 - The release-consistency gate (above) ships with the component and must stay
-- When a test guards specific logic, prove it can fail: temporarily break the
-  guarded behavior (a known-bad mutant), confirm the test goes red, restore
-  the behavior, and keep the test
+- Tests call real product modules and CLIs. Negative cases use fixture data or
+  failing CLI responses; never rewrite product source at runtime.
 - Default tests fake the comm-bridge and scheduler CLIs and point the component at a
   temporary data directory (`ZYLOS_DATA_DIR`); they never read the real C4
   database or the real `~/zylos`
@@ -64,6 +63,6 @@ negative controls intact — a gate that cannot fail proves nothing.
 - **The methodology is versioned with the component.** Changes to
   `references/methodology.md` change what every future run writes; historical
   entries are never rewritten to match. Call such changes out in the CHANGELOG.
-- **Time, not ids.** Runs are defined by `now − lookback`; the only C4 primitive
-  used is `c4-db.js recent N` through the comm-bridge CLI. Do not introduce
-  cursors, id-ordering assumptions, or direct `c4.db` access.
+- **Digested progress per group.** Fetch only checkpoint-covered ranges;
+  preserve deferred clues and advance only completed groups. Use public C4
+  CLIs, never direct database access. Older Core fallback must be explicit.

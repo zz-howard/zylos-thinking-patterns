@@ -32,16 +32,22 @@ export const DEFAULT_CONFIG = {
   max_conversations: 300,
   max_page_bytes: 64 * 1024 * 1024,
   default_lookback: '24h',
-  c4_db_cli: `${ZYLOS_DIR_DISPLAY}/.claude/skills/comm-bridge/scripts/c4-db.js`
+  c4_db_cli: `${ZYLOS_DIR_DISPLAY}/.claude/skills/comm-bridge/scripts/c4-db.js`,
+  c4_fetch_cli: `${ZYLOS_DIR_DISPLAY}/.claude/skills/comm-bridge/scripts/c4-fetch.js`,
+  trace_max_clues: 15,
+  trace_context: 10,
+  trace_max_bytes: 512000,
+  artifact_retention_days: 7
 };
 
 // Channels that never carry the subject's judgment: scheduler/system notices
 // and the agent's own void memos. Owners can override in the policy.
-export const DEFAULT_EXCLUDE_CHANNELS = ['system', 'void'];
+export const DEFAULT_EXCLUDE_CHANNELS = ['internal', 'system', 'void', 'multica'];
 export const DEFAULT_POLICY = 'default';
 
 export const DEFAULT_STATE = {
-  schema_version: 2,
+  schema_version: 3,
+  material_scopes: {},
   last_run_at: null,
   last_result: null,
   last_update_at: null,
@@ -81,7 +87,7 @@ list, or "all"); everything finer — which groups, which topics, what to
 ignore — is written in plain language for the agent to judge.
 
 Channels: all
-Exclude channels: system, void
+Exclude channels: internal, system, void, multica
 
 Sources: (fill in, or "all")
 
@@ -134,7 +140,7 @@ export function parseDuration(value) {
 // Owner-facing questions the agent must ask before registering a scheduled task.
 export const SCHEDULE_QUESTIONS = [
   'How often should it run? (a cron expression in the scheduler timezone; nightly after the working day is typical)',
-  'How far back should each run look? (the lookback, e.g. 24h or 7d; default = the run interval. Shorter than the interval leaves gaps; longer overlaps, which is harmless because the methodology de-duplicates against the pattern file)',
+  'What lookback should older-Core fallback use? (e.g. 24h or 7d; normal runs follow each group checkpoint instead)',
   'A short task name, only when this is not the first scheduled task (e.g. daily, weekly) — several tasks may run with different lookbacks against the same policy; and, when more than one policy file exists (policy.md, policy-<name>.md, one per subject), which policy this task uses'
 ];
 
