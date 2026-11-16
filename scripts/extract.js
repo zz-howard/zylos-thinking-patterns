@@ -266,6 +266,11 @@ function commandFetch(args) {
   let run;
   if (scope.active_run) run = readRun(scope.active_run);
   else {
+    if (scope.write_pending) {
+      delete scope.write_pending;
+      state.material_scopes = { ...state.material_scopes, [key]: scope };
+      atomicWriteJson(STATE_PATH, state);
+    }
     try {
       run = collectMaterials(config, scope, { channels: policy.channels, exclude_channels: policy.exclude_channels });
     } catch (err) {
@@ -306,7 +311,7 @@ function commandWrite(args) {
   if (scope.active_run && runId !== scope.active_run) throw new Error('Pattern write requires the active --run');
   if (runId && (readRun(runId).scope !== key || scope.active_run !== runId)) throw new Error('Run is no longer active for this task/policy');
   // Persist refusal before invoking a writer so interrupted writes cannot advance.
-  scope.write_pending = true;
+  scope.write_pending = runId ?? 'legacy';
   state.material_scopes = { ...state.material_scopes, [key]: scope };
   atomicWriteJson(STATE_PATH, state);
   const result = writePatterns({ target: path.resolve(expandHome(policy.patterns_file)), file,
@@ -324,7 +329,9 @@ function commandCommit(args) {
   const task = normalizeTaskName(args.task);
   const policy = normalizePolicyName(args.policy);
   let state = loadState();
-  if (result !== 'skip' && state.material_scopes?.[scopeKey(args)]?.write_pending) throw new Error('Pattern write is pending; progress cannot advance until writing succeeds');
+  const scope = state.material_scopes?.[scopeKey(args)];
+  const pending = scope?.write_pending;
+  if (result !== 'skip' && pending && (pending === true || pending === (optional(args, 'run') ?? scope.active_run ?? 'legacy'))) throw new Error('Pattern write is pending; progress cannot advance until writing succeeds or this run is skipped');
   let finishedRun;
   let materialRun;
   const runId = optional(args, 'run');
@@ -355,6 +362,7 @@ function commandCommit(args) {
   } else if (state.material_scopes?.[scopeKey(args)]?.active_run && result !== 'skip') {
     throw new Error('Checkpoint commit requires --run from fetch');
   }
+  if (result === 'skip' && scope) delete scope.write_pending;
   const now = new Date().toISOString();
   const windowEnd = optional(args, 'window-end');
   const lookback = optional(args, 'lookback');

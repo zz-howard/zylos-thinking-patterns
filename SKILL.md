@@ -130,8 +130,11 @@ Outer layer, in the main session:
    unchanged and retry next run; do not commit these ranges. On `MEMORY_CONFLICT`,
    reread the full file, merge the draft again and retry with the new raw hash.
    Other writer errors also defer; never bypass a writer rejection with direct
-   writing. Failed/interrupted writes block non-skip commits until a successful
-   write. A skip advances no ranges.
+   writing. Failed/interrupted writes block non-skip commits in the initiating
+   run until a successful write. `skip` clears that run's guard and advances no
+   ranges. Fetch resumes an active run with its guard intact; after skip, a new
+   fetch starts a fresh run and clears any abandoned guard. A fresh run may
+   legitimately conclude `no_change`, including the *ask me first* case.
    Whenever a run summary is sent, end it with one line from `patterns.lint.summary`, e.g. `lint: 31 Type outside the six, 6 possible compound Domain (owner check), 7 Related references without #N (124 concept items), 0 dangling, 0 Reinforced headers off format` — so drift in the file stays visible to the owner. The lint reports; it never edits the file, and neither does this workflow beyond appending.
 7. Commit only fully processed ranges. Checkpoint mode requires `--run <run_id>` and optionally `--groups <comma-separated-groups>`; without `--groups`, all remaining ranges are completed. `skip` never advances progress. Fallback commits retain `--lookback` and `--window-end`. Use the same task/policy:
    - pattern file changed: `commit --result updated ...`

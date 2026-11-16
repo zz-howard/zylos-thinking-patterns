@@ -45,7 +45,11 @@ function fixture(t, { target = 'memory', existing = true, writer = true } = {}) 
   if (writer) {
     fs.writeFileSync(writerFile, `import { runMemoryWriteCli } from ${JSON.stringify(pathToFileURL(coreWriter).href)};\nprocess.exitCode = await runMemoryWriteCli(process.argv.slice(2), { currentRunId: async () => 'fixture-run' });\n`);
   }
-  fs.writeFileSync(path.join(env.ZYLOS_DATA_DIR, 'config.json'), JSON.stringify({ enabled: true, memory_writer: writerFile }));
+  const materialCli = path.join(ROOT, 'test/fixtures/material-cli.js');
+  env.MATERIAL_FIXTURE = path.join(root, 'material-fixture.json');
+  env.MATERIAL_CALLS = path.join(root, 'material-calls.jsonl');
+  fs.writeFileSync(env.MATERIAL_FIXTURE, JSON.stringify({ groups: [GROUP], checkpoints: [{ id: 2, session_group: GROUP, start_conversation_id: 11, end_conversation_id: 20 }], rows: [] }));
+  fs.writeFileSync(path.join(env.ZYLOS_DATA_DIR, 'config.json'), JSON.stringify({ enabled: true, memory_writer: writerFile, c4_db_cli: materialCli, c4_fetch_cli: materialCli }));
   fs.writeFileSync(path.join(env.ZYLOS_DATA_DIR, 'policy.md'), `# Private fixture policy\n\nSubject: the owner\n\n## Target\n\nPatterns file: ${patterns}\n\n## Sources\n\nChannels: all\nConfirmation: record and notify me\n`);
   const stateFile = path.join(env.ZYLOS_DATA_DIR, 'state.json');
   const state = {
@@ -93,7 +97,7 @@ test('real locked writer defers during Sync and advances progress only after suc
   assert.equal(fs.readFileSync(f.patterns, 'utf8'), ORIGINAL);
   assert.equal(f.state().material_scopes['default:daily'].groups[GROUP].end_conversation_id, 10);
   assert.equal(f.state().last_run_at, before.last_run_at);
-  assert.equal(f.state().material_scopes['default:daily'].write_pending, true);
+  assert.equal(f.state().material_scopes['default:daily'].write_pending, RUN);
   const pendingState = fs.readFileSync(f.stateFile, 'utf8');
   for (const run of [true, false]) {
     for (const result of ['no_change', 'updated']) {
@@ -128,6 +132,51 @@ test('stale hash defers publication and blocks a no-change commit', t => {
   assert.equal(fs.readFileSync(f.patterns, 'utf8'), ORIGINAL);
   assert.equal(f.commit('no_change').status, 'error');
   assert.equal(f.state().material_scopes['default:daily'].groups[GROUP].end_conversation_id, 10);
+});
+
+// Guard lifecycle: required for skip/new-run changes, otherwise skippable; private fixture only.
+test('skipping a deferred write allows a fresh run to commit without publication', t => {
+  const f = fixture(t);
+  assert.equal(f.write(ORIGINAL + NEW_ENTRY, hash('stale bytes')).status, 'write_deferred');
+  assert.equal(f.commit('no_change').status, 'error');
+  assert.equal(f.commit('skip').status, 'committed');
+  assert.equal(f.state().material_scopes['default:daily'].write_pending, undefined);
+  assert.equal(f.state().material_scopes['default:daily'].groups[GROUP].end_conversation_id, 10);
+  const policy = path.join(f.env.ZYLOS_DATA_DIR, 'policy.md');
+  fs.writeFileSync(policy, fs.readFileSync(policy, 'utf8').replace('record and notify me', 'ask me first'));
+  const next = f.invoke(['fetch', '--task', 'daily']);
+  assert.equal(next.status, 'ready');
+  assert.notEqual(next.run_id, RUN);
+  assert.equal(f.invoke(['trace', '--run', next.run_id, '--task', 'daily']).status, 'ready');
+  assert.equal(f.invoke(['commit', '--result', 'no_change', '--run', next.run_id, '--task', 'daily']).status, 'committed');
+  assert.equal(f.state().material_scopes['default:daily'].groups[GROUP].end_conversation_id, 20);
+  assert.equal(fs.readFileSync(f.patterns, 'utf8'), ORIGINAL);
+});
+
+// Active-run resume: required for fetch/guard changes, otherwise skippable; private fixture only.
+test('fetch resumes an active deferred run and preserves its publication guard', t => {
+  const f = fixture(t);
+  assert.equal(f.write(ORIGINAL + NEW_ENTRY, hash('stale bytes')).status, 'write_deferred');
+  const resumed = f.invoke(['fetch', '--task', 'daily']);
+  assert.equal(resumed.run_id, RUN);
+  assert.equal(f.state().material_scopes['default:daily'].write_pending, RUN);
+  assert.equal(f.commit('no_change').status, 'error');
+  assert.equal(f.state().material_scopes['default:daily'].groups[GROUP].end_conversation_id, 10);
+});
+
+// Abandoned guard: required for new-run initialization, otherwise skippable; private fixture only.
+test('fetch clears an abandoned write guard when starting a new run', t => {
+  const f = fixture(t);
+  const state = f.state();
+  delete state.material_scopes['default:daily'].active_run;
+  state.material_scopes['default:daily'].write_pending = RUN;
+  fs.writeFileSync(f.stateFile, JSON.stringify(state));
+  const next = f.invoke(['fetch', '--task', 'daily']);
+  assert.equal(next.status, 'ready');
+  assert.notEqual(next.run_id, RUN);
+  assert.equal(f.state().material_scopes['default:daily'].write_pending, undefined);
+  assert.equal(f.invoke(['trace', '--run', next.run_id, '--task', 'daily']).status, 'ready');
+  assert.equal(f.invoke(['commit', '--result', 'no_change', '--run', next.run_id, '--task', 'daily']).status, 'committed');
 });
 
 for (const scenario of [

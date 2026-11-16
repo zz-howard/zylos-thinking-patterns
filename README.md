@@ -71,7 +71,9 @@ Commands also accept `--policy name`; `commit --groups G,H` completes only
 selected finished groups. Fetch resumes an active run; skip advances nothing.
 Before writing, read the full destination and hash its raw bytes. Existing memory
 files use Core's locked replacement mode. Busy locks, conflicts and writer errors
-defer publication and block progress until a successful write. Reread and merge
+defer publication and block progress in the initiating run until a successful
+write or skip. Skip clears the guard without advancing; fetch resumes active
+runs and clears abandoned guards when starting a fresh run. Reread and merge
 conflicts before retrying. Missing files, paths outside memory and older Core
 without the writer use direct mode with an explicit fallback reason.
 See [SKILL.md](SKILL.md), [output fields](references/fetch-output.md),

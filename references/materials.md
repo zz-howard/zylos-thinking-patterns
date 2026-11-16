@@ -74,8 +74,10 @@ Reinforced blocks and appending consecutively numbered new entries. Existing
 memory files use Core's replacement writer with a relative path, expected raw
 hash and full draft bytes on stdin. The writer handles the memory lock and Sync
 marker. Busy/timeout/conflict/error returns `write_deferred` and leaves commit
-blocked until successful retry; on conflict reread and merge before retrying.
+blocked within that run until successful retry; on conflict reread and merge before retrying.
 Direct writing reports `file_missing`, `outside_memory`, or `writer_unavailable`.
 A writer rejection never enables direct fallback. No-change/updated commits are
-refused while a write is pending; skip never advances. Writing alone does not
-advance checkpoint ranges.
+refused while a write is pending for that run. The guard stores its initiating
+run ID (or `legacy` for time-window fallback). Skip clears it without advancing.
+Fetch resumes an active run with its guard, but clears abandoned guards when
+starting a new run. Writing alone does not advance checkpoint ranges.
