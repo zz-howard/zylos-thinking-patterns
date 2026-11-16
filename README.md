@@ -1,163 +1,129 @@
-<p align="center">
-  <img src="./assets/logo.png" alt="Zylos" height="120">
-</p>
+# zylos-thinking-patterns
 
-<h1 align="center">zylos-thinking-patterns</h1>
+Extract reusable decision heuristics from digested memory and C4 context.
+Requires Node.js 20+ and Zylos comm-bridge/scheduler. Production uses public
+CLIs, never C4's database. A background agent follows the unchanged
+[methodology](references/methodology.md) and prepares drafts; the explicit
+`write` command validates and publishes them.
 
-<p align="center">
-  Thinking-pattern extraction component for Zylos agents.
-</p>
-
-<p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg" alt="Node.js"></a>
-  <a href="https://discord.gg/GS2J39EGff"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://x.com/ZylosAI"><img src="https://img.shields.io/badge/X-follow-000000?logo=x&logoColor=white" alt="X"></a>
-  <a href="https://zylos.ai"><img src="https://img.shields.io/badge/website-zylos.ai-blue" alt="Website"></a>
-</p>
-
----
-
-`zylos-thinking-patterns` periodically mines an agent's C4 conversations for decision moments and distills the ones that generalize into numbered decision heuristics — of a person (an owner's way of deciding), a role (how a product-manager agent decides), or a domain (product-design decisions across projects).
-
-The **methodology** is fixed and ships with the component. Everything scenario-specific — whose patterns, from which conversations, into which file, and how candidates are confirmed — is the installing **owner's** decision, written once into a plain-language `policy.md`. It has the same shape as [zylos-identity-reflection](https://github.com/zz-howard/zylos-identity-reflection): a script fetches the time window the owner chose and records run state; a background subagent applies the methodology and writes pattern entries. The script never writes patterns on its own.
-
-## System Requirements
-
-- Node.js 20+, provided by the Zylos runtime.
-- The Zylos `comm-bridge` and `scheduler` skills. All conversation access goes through the comm-bridge CLI; the component never opens the C4 database directly and does not need `sqlite3`.
-
-## Core History Compatibility
-
-On Core versions with conversation projection, structured history messages
-appear as readable text. Earlier Core versions already provide plain-text
-history, so extraction works as usual with no minimum Core version requirement.
-The component measures the JSON page returned by Core, including metadata and
-formatting, then passes its text unchanged to the extraction agent without
-projecting it a second time.
-
-## Install
+## Setup
 
 ```bash
 zylos add zz-howard/zylos-thinking-patterns
 ```
 
-The post-install hook creates:
+Hooks create config, state, logs and a policy template under
+`~/zylos/components/thinking-patterns/`. Fill the subject, destination, source
+channels, domains, confirmation, notifications and guidance; remove the
+`UNCONFIGURED` marker. `Patterns file:` under `## Target` remains the only
+append-only pattern destination. Owner policy is never overwritten.
 
-- `~/zylos/components/thinking-patterns/config.json`
-- `~/zylos/components/thinking-patterns/policy.md` — a **template** with the owner's questions
-- `~/zylos/components/thinking-patterns/state.json`
-- `~/zylos/components/thinking-patterns/logs/`
+Channel filters default to excluding `internal, system, void, multica` and
+never filter senders. Additional policies use `policy-<name>.md` and
+`--policy <name>`. Each policy/task owns independent checkpoint progress.
+Inbound collection also excludes stored content starting with `[Scheduled Task:` in both checkpoint and legacy modes; the marker elsewhere is retained and trace context is unchanged.
 
-It does **not** register a scheduler task. The owner decides when extraction runs. The hook prints an "OWNER ACTION REQUIRED" block that the agent relays to the owner.
-
-## Owner Setup
-
-Three decisions belong to the owner; the agent asks and writes them down.
-
-1. **Policy.** Answer the questions in `policy.md` (whose or what patterns; which file they go to; which conversation streams; the starting set of Domain tags; whether to record directly, ask first, or record silently; where run summaries go), then remove the `UNCONFIGURED` marker line. Until the marker is gone every run is skipped and the agent keeps reminding the owner. A fresh template:
-   ```bash
-   node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template --policy
-   ```
-   The policy is prose for the agent except for three lines that the script reads, each only inside its own section (the same words elsewhere in the file are treated as prose):
-   - `Patterns file: <path>` under `## Target` — the only file the workflow ever writes. An existing file in the methodology's entry format is picked up as-is; numbering continues from its highest entry.
-   - `Channels: all|<list>` and `Exclude channels: <list>|none` under `## Sources` — a coarse filter on the C4 channel applied at fetch time. When the exclude line is absent, `system` and `void` (scheduler notices, the agent's own memos) are excluded. Anything finer — groups, topics, people — stays prose and is the agent's judgment.
-2. **Threshold.** Optionally set `min_conversations`, `max_conversations`, `max_page_bytes`, `default_lookback` in `config.json`.
-3. **Schedule.** Before registering any scheduled task the agent asks the owner three things: how often it runs (cron), how far back each run looks (the lookback, default = the run interval), and a task name when it is not the first task. The template prints these questions and the registration command with the chosen values (the prompt must be used verbatim):
-   ```bash
-   node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template --lookback 24h --task daily --cron "50 23 * * *"
-   ```
-
-Several tasks may coexist with different lookbacks — for example a daily `24h` pass and a weekly `7d` pass that catches cross-day patterns. They share the one policy and pattern file; overlap between runs is harmless because the methodology de-duplicates against the file. There is no cursor and nothing to seed on first install: the first run simply looks back its lookback.
-
-A second subject (another person, role or domain) is a second policy file, `policy-<name>.md`, with its own `Patterns file`. Every command takes `--policy <name>` to address it, and its scheduler tasks are named `thinking-patterns-<name>[-<task>]`. One policy, one subject, one pattern file.
-
-## Configuration
-
-`~/zylos/components/thinking-patterns/config.json`:
-
-```json
-{
-  "enabled": true,
-  "min_conversations": 4,
-  "max_conversations": 300,
-  "max_page_bytes": 67108864,
-  "default_lookback": "24h",
-  "c4_db_cli": "~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js"
-}
-```
-
-- `min_conversations` (default 4, about two exchanges) — below this many in-scope messages inside the window the run is recorded as `skip`. A skip triggers no catch-up read: every run takes its own `now − lookback` window, so messages that fall outside every later window (for example a quiet day under a daily 24h task with no overlapping or longer task) are never read again. Extracting nothing from a quiet window is a normal outcome, which is why the default is low.
-- `max_conversations` — the most messages a single run will read, counted after the policy's channel filter; when a window holds more in-scope messages, the oldest are left out and the fetch result says `truncated: true` with `truncated_out` = how many.
-- `max_page_bytes` (default 64 MiB) — the most output this process will parse from one `c4-db.js recent N` call. Pages grow until the window is covered; a page over this bound is discarded unread and fetch works from the previous page (the newest rows), reporting `window_complete: false`, `truncated: true` and `truncated_out: null` (unknown). If even the first page is over the bound, fetch fails with an error naming the knobs. What this bounds is this process's parsing: the comm-bridge CLI still builds the whole page in its own memory and writes it to a private temp file before it is measured — that residual cost is not bounded here.
-- `default_lookback` — used when a task does not pass `--lookback`. Each scheduled task normally carries its own.
-
-The target pattern file is not in config: it is the policy's `Patterns file` line; config carries no copy of it.
-
-## Runtime Model
-
-A recurring scheduler task dispatches the skill. The main session launches a **background subagent** and only marks the task done afterwards. The subagent:
-
-1. `extract.js fetch --lookback <d> --task <name> [--policy <p>]` — asks comm-bridge for the newest rows (growing the page until the whole window is in hand or `max_page_bytes` would be exceeded), keeps those inside the lookback window (compared as instants; the window and every transcript timestamp are rendered in the owner's time zone — `TZ` from `.env` — with the UTC offset spelled out, e.g. `2026-09-05 19:20:14 +08:00`), applies the policy's channel filter (echoed back as `filters` / `filtered_out`), then caps at `max_conversations` (newest kept, `truncated` / `truncated_out`), checks the threshold and the policy marker, reports policy sections still holding template placeholders (`policy_placeholders`), and summarizes the target file (next entry number, Domain/Type distribution, and an index of existing entries by number, title and tag so de-duplication starts from the index rather than a full re-read).
-2. Reads `policy.md`, `references/methodology.md`, and the current pattern file.
-3. Applies the methodology: detect decision moments → extract cues and rationale → induce candidates → reinforce an existing entry, flag a contradiction, or create a new numbered entry → apply the quality bar. Extracting nothing is a normal outcome.
-4. Writes (or holds candidates) per the policy's confirmation mode and notifies the owner's endpoint if the policy asks for it.
-5. `extract.js commit --result updated|no_change|skip --task <name> ...` — records the run.
-
-See [`SKILL.md`](./SKILL.md) for the exact workflow and write boundary, and [`references/methodology.md`](./references/methodology.md) for the extraction procedure, two-axis taxonomy (`[Domain: X | Type: Y]`), entry format and quality bar.
-
-## CLI
+Hooks register no scheduler tasks. Ask the owner for frequency, fallback
+lookback, task name and policy; print the exact registration command:
 
 ```bash
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js fetch [--lookback 24h] [--task name] [--policy name]
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js commit --result skip|no_change|updated [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS +HH:MM"]
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js inspect [--policy name]   # policy filters/placeholders, pattern file: entry index, next number, Domain/Type distribution
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js status [--policy name]    # config + state + policy + patterns
-node ~/zylos/.claude/skills/thinking-patterns/scripts/extract.js template [--policy | --policy name] [--lookback 24h] [--task name] [--cron "..."] [--json]
+node scripts/extract.js template --lookback 24h --task daily --cron '50 23 * * *'
 ```
 
-Every command prints JSON except `template`, which prints text unless `--json` is given. `template --policy` with no value prints the policy template; with a name it prints the scheduler template for that policy.
+## Flow
 
-## State
+1. Fetch each group's Memory Sync checkpoint-covered range, daily memory paths,
+   changed decision/preference paths and allowed-channel inbound messages.
+2. The background agent reads memory, then the complete inbound net; selects
+   decision/correction clues by meaning; traces them in their original group.
+3. Trace includes replies under clue/context/byte limits. Deferred work persists.
+4. Apply the methodology, publish a draft or hold according to confirmation, notify only
+   the policy endpoint. Source attributions include group and C4 message ID.
+5. Commit finished ranges. Identity-reflection reuses matching correction traces.
 
-`state.json` records `last_run_at`, `last_result`, `last_update_at`, and `last_window` (task, policy, lookback, window end). There is no cursor: each run is defined by its own window. Each commit appends one line to `logs/runs.jsonl`. `config.json`, `policy.md`, `state.json`, `logs/` and `backups/` are preserved across upgrades; the `post-install` and `post-upgrade` hooks merge new defaults into `config.json` and normalize `state.json` but write only when the merged content differs from the file (owner values always win). The `pre-upgrade` hook copies the first three into `backups/<timestamp>/`, but the current `zylos upgrade` pipeline does not invoke component pre-upgrade hooks (zylos-core takes its own backup); run `node hooks/pre-upgrade.js` by hand if you want this component's snapshot.
+New groups start from the latest day; unsynced tails wait for a checkpoint.
+Older Core uses explicit `legacy_time_window` fallback with a reason. Only
+fallback applies lookback and legacy conversation caps; truncation stays visible.
 
-## Design Notes
+## Configuration And CLI
 
-Runs are defined by time, not by id: the owner sets how often a task runs and how far back it looks, and `c4-db.js recent N` (the newest N rows ordered by timestamp, with content) is the only C4 primitive used; it has no time-range parameter, so fetch asks for a page one row beyond the cap and doubles it until the oldest row returned predates the window (one call in the common case), stopping early at `max_page_bytes`. A time-range or content-less listing primitive on the comm-bridge side would remove the paging and its residual cost; until it exists, an incomplete read is reported, never hidden. No id-ordering assumption, no cursor to seed or repair.
+Config in the data directory includes `enabled`, `c4_db_cli`, `c4_fetch_cli`,
+`trace_max_clues` (15), `trace_context` (10 messages each side),
+`trace_max_bytes` (512000), `artifact_retention_days` (7), `max_page_bytes`
+(64 MiB), plus legacy-only `min_conversations` (4), `max_conversations` (300),
+and `default_lookback` (`24h`). CLI paths default to the installed comm-bridge.
+`memory_writer` defaults to Core's installed locked memory writer.
 
-Architecture and the full list of design decisions live in [docs/DESIGN.md](./docs/DESIGN.md); the `fetch` output is documented field by field in [references/fetch-output.md](./references/fetch-output.md).
-
-## Development
+`max_page_bytes` bounds each CLI response; sparse same-group traces may require
+more range scans. Owner `TZ` selects session days. Normal collection does not
+drop checkpoint-covered rows at a fixed conversation count.
 
 ```bash
-npm test        # self-contained unit/release tests; no Core checkout or sqlite3 needed
-npm run check   # syntax check of scripts and hooks
+node scripts/extract.js fetch --task daily --lookback 24h
+node scripts/extract.js trace --run UUID --task daily --clues clues.json
+node scripts/extract.js trace --run UUID --task daily
+node scripts/extract.js write --file draft.md --sha256 HASH --run UUID --task daily
+node scripts/extract.js commit --run UUID --task daily --result no_change
+node scripts/extract.js inspect
+node scripts/extract.js status
 ```
 
-The default tests create fake comm-bridge CLIs in private directories. They
-need neither ZYLOS_PACKAGE_ROOT nor TEST_LEGACY_CORE_ROOT.
+Commands also accept `--policy name`; `commit --groups G,H` completes only
+selected finished groups. Fetch resumes an active run; skip advances nothing.
+Before writing, read the full destination and hash its raw bytes. Existing memory
+files use Core's locked replacement mode. Busy locks, conflicts and writer errors
+defer publication and block progress in the initiating run until a successful
+write or skip. Skip clears the guard without advancing; fetch resumes active
+runs and clears abandoned guards when starting a fresh run. Reread and merge
+conflicts before retrying. Missing files, paths outside memory and older Core
+without the writer use direct mode with an explicit fallback reason.
+See [SKILL.md](SKILL.md), [output fields](references/fetch-output.md),
+[shared artifacts](references/materials.md) and [design](docs/DESIGN.md).
 
-## Projection Integration Tests
+Hooks merge defaults idempotently, preserving owner values, state, logs,
+`materials/` and backups. `pre-upgrade` snapshots config/policy/state, but Core
+currently takes its own backup rather than invoking that hook.
 
-These tests are opt-in and require sqlite3. Use the current `multi-session/chat`
-Core checkout with its
-existing development dependencies and an older Core checkout at `6436b3e2`
-without the public projection module. Both checkouts need existing Core
-dependencies. The tests import the message prefix from the current Core schema.
-Do not install either into a live instance.
-Keep the component's `v0.2.2` Git tag available for the unchanged transcript
-baseline. Run with temporary HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR. Cases
-create private C4 databases and policy/pattern paths, and clean up their files;
-no model, runtime, network, PM2 or tmux is invoked. Only the test fixtures use
-sqlite3 to seed their private database; production uses the comm-bridge CLI.
+## Verification
 
 ```bash
-ZYLOS_PACKAGE_ROOT=/path/to/core-checkout \
-TEST_LEGACY_CORE_ROOT=/path/to/older-core \
-npm run test:integration
+npm run test:materials
+npm run check
+```
+
+Fixture tests invoke product modules/CLIs with isolated HOME, ZYLOS_DIR, data,
+PM2_HOME and short TMPDIR, no live C4/services. Entries name `.test.js` files
+explicitly. Tests do not rewrite product code. Full unit/release tests remain
+available through `npm test`; run affected tests for focused changes.
+
+Real-Core checkpoint integration requires existing Core dependencies:
+
+```bash
+ZYLOS_PACKAGE_ROOT=/path/to/core node --test test/checkpoint-history.test.js
+```
+
+It uses private databases and isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; no model,
+runtime, PM2, tmux or network. Only fixtures seed private databases directly.
+Cases document coverage and when required. Never target live resources.
+
+Locked publication integration requires a Core checkout containing the memory
+writer; run it for pattern publication or commit-guard changes:
+
+```bash
+ZYLOS_PACKAGE_ROOT=/path/to/core node --test test/pattern-write.test.js
+```
+
+It isolates HOME, ZYLOS_DIR, data, PM2_HOME, TMPDIR and TMUX_TMPDIR. It calls the
+real Core writer with only its run observer injected, touches no live resources,
+starts no services or network, bounds children and cleans its owned directories.
+
+Existing projection compatibility integration additionally requires sqlite3,
+an older Core checkout and the `v0.2.2` baseline tag:
+
+```bash
+ZYLOS_PACKAGE_ROOT=/path/to/current-core TEST_LEGACY_CORE_ROOT=/path/to/old-core npm run test:integration
 ```
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](LICENSE)

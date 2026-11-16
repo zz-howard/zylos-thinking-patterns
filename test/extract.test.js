@@ -21,6 +21,7 @@ function runNode(script, args = [], env = {}) {
     cwd: ROOT,
     env: { ...process.env, ...env },
     encoding: 'utf8',
+    timeout: 15000,
     maxBuffer: 64 * 1024 * 1024 // the harness must not be the bottleneck the inbound-buffer test probes
   });
 }
@@ -101,7 +102,7 @@ function setup(rows, config = {}) {
   const dataDir = path.join(dir, 'data');
   const dbPath = createFakeC4(dir, rows);
   const patternsFile = path.join(dir, 'patterns.md');
-  writeConfig(dataDir, { min_conversations: 2, c4_db_cli: dbPath, ...config });
+  writeConfig(dataDir, { min_conversations: 2, c4_db_cli: dbPath, c4_fetch_cli: dbPath, ...config });
   writeConfiguredPolicy(dataDir, patternsFile);
   return { dir, dataDir, patternsFile, env: { ZYLOS_DATA_DIR: dataDir } };
 }
@@ -138,7 +139,7 @@ test('fetch returns ready envelope with transcript at threshold', () => {
   assert.equal(result.patterns.next_number, 1);
   assert.equal(result.policy, 'default');
   assert.ok(result.policy_file.endsWith('policy.md'));
-  assert.deepEqual(result.filters, { channels: null, exclude_channels: ['system', 'void'] });
+  assert.deepEqual(result.filters, { channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'] });
   assert.equal(result.filtered_out, 0);
   assert.ok(result.methodology_file.endsWith('references/methodology.md'));
 });
@@ -469,7 +470,7 @@ test('commit records the run, task and window without marking an update', () => 
 
   assert.equal(result.status, 'committed');
   assert.equal(result.task, 'daily');
-  assert.equal(state.schema_version, 2);
+  assert.equal(state.schema_version, 3);
   assert.equal(state.last_result, 'skip');
   assert.equal(state.last_update_at, null);
   assert.deepEqual(state.last_window, { task: 'daily', policy: 'default', lookback: '24h', end: '2026-09-05 00:00:00 +08:00' });
@@ -608,7 +609,7 @@ test('status exposes config, state, policy and pattern-file summary', () => {
   assert.equal(result.status, 'ok');
   assert.equal(result.config.min_conversations, 2);
   assert.equal(result.config.default_lookback, '24h');
-  assert.equal(result.state.schema_version, 2);
+  assert.equal(result.state.schema_version, 3);
   assert.equal(result.state.last_run_at, null);
   assert.equal(result.policy_unconfigured, false);
   assert.equal(result.patterns.next_number, 1);
@@ -621,7 +622,7 @@ test('template prints the owner questions and a scheduler command carrying lookb
 
   assert.match(text, /ask the owner/i);
   assert.match(text, /1\. How often should it run\?/);
-  assert.match(text, /2\. How far back should each run look\?/);
+  assert.match(text, /2\. What lookback should older-Core fallback use\?/);
   assert.match(text, /3\. A short task name/);
   assert.match(text, /scheduler\/scripts\/cli\.js add '/);
   assert.match(text, /--cron '0 22 \* \* 0'/);
@@ -698,10 +699,10 @@ test('post-install creates config, policy template, state and logs dir without t
   assert.match(output, /Created config\.json/);
   assert.match(output, /Created policy\.md/);
   assert.match(output, /Created state\.json/);
-  assert.match(output, /How far back should each run look/);
+  assert.match(output, /What lookback should older-Core fallback use/);
   assert.ok(fs.existsSync(path.join(dataDir, 'config.json')));
   assert.ok(fs.readFileSync(path.join(dataDir, 'policy.md'), 'utf8').startsWith(UNCONFIGURED_MARKER));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')).schema_version, 2);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')).schema_version, 3);
   assert.ok(fs.statSync(path.join(dataDir, 'logs')).isDirectory());
   assert.equal(fs.existsSync(trapMarker), false);
 });
@@ -796,11 +797,26 @@ test('fetch excludes system and void channels by default and reports filtered_ou
   assert.equal(result.status, 'ready');
   assert.equal(result.count, 3);
   assert.equal(result.filtered_out, 2);
-  assert.deepEqual(result.filters, { channels: null, exclude_channels: ['system', 'void'] });
+  assert.deepEqual(result.filters, { channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'] });
   assert.match(result.conversations, /\(telegram:1\)/);
   assert.match(result.conversations, /\(lark:1\)/);
   assert.doesNotMatch(result.conversations, /\(system:1\)/);
   assert.doesNotMatch(result.conversations, /\(void:1\)/);
+});
+
+test('legacy fetch excludes only messages beginning with the scheduled task marker', t => {
+  const rows = makeRows([10, 9]);
+  rows[0].content = '[Scheduled Task: task-1 #1] machine prompt';
+  rows[1].direction = 'in';
+  rows[1].content = 'quoted [Scheduled Task: task-1 #1] retained';
+  const { dir, env } = setup(rows, { min_conversations: 1, c4_fetch_cli: '/missing-checkpoint-cli' });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const result = JSON.parse(runNode(EXTRACT, ['fetch'], env));
+  assert.equal(result.mode, 'legacy_time_window');
+  assert.equal(result.count, 1);
+  assert.equal(result.filtered_out, 1);
+  assert.match(result.conversations, /quoted \[Scheduled Task:/);
+  assert.doesNotMatch(result.conversations, /machine prompt/);
 });
 
 test('fetch applies the policy Channels include list', () => {
@@ -875,7 +891,7 @@ test('parsePolicy positive and negative controls', async () => {
   assert.deepEqual(full, { patterns_file: '~/a.md', channels: ['telegram', 'lark'], exclude_channels: ['system'], placeholders: [] });
 
   const bare = parsePolicy('# Policy\nSubject: x\n');
-  assert.deepEqual(bare, { patterns_file: null, channels: null, exclude_channels: ['system', 'void'], placeholders: [] });
+  assert.deepEqual(bare, { patterns_file: null, channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'], placeholders: [] });
 
   const placeholders = parsePolicy('## Target\nPatterns file: (fill in, e.g. ~/x.md)\n## Sources\nChannels: all\nExclude channels: none\n');
   assert.deepEqual(placeholders, { patterns_file: null, channels: null, exclude_channels: [], placeholders: ['Target'] });
@@ -886,7 +902,7 @@ test('parsePolicy positive and negative controls', async () => {
   assert.equal(parsePolicy('## Target\nsee the Patterns file: ~/b.md line\n').patterns_file, null);
   // Labels count only inside their own section: the same line elsewhere is owner prose.
   const decoy = '## Target\n\n## Sources\nprose\n## Extra guidance\nPatterns file: ~/decoy.md\nChannels: lark\nExclude channels: none\n';
-  assert.deepEqual(parsePolicy(decoy), { patterns_file: null, channels: null, exclude_channels: ['system', 'void'], placeholders: [] });
+  assert.deepEqual(parsePolicy(decoy), { patterns_file: null, channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'], placeholders: [] });
   // Section lookup is case-insensitive and stops at the next heading.
   assert.equal(parsePolicy('## target\nPatterns file: ~/c.md\n## Sources\n').patterns_file, '~/c.md');
   assert.equal(parsePolicy('## Sources\n## Target\nPatterns file: ~/d.md\n').patterns_file, '~/d.md');

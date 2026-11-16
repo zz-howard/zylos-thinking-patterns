@@ -1,15 +1,17 @@
 #!/usr/bin/env node
-// thinking-patterns CLI: time-window fetch, run state and templates.
+// thinking-patterns CLI: checkpoint materials, explicit legacy fetch and run state.
 // It never reads c4.db directly — every C4 access goes through the comm-bridge CLI
-// (c4-db.js recent) — and it never writes the pattern file. Judgment belongs to the agent.
+// Pattern proposals are published only through the explicit write command.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { collectMaterials, traceMaterials, commitMaterials, saveArtifact, materialFailureReason } from './materials.js';
+import { writePatterns } from './pattern-write.js';
 import {
-  CONFIG_PATH, STATE_PATH, LOG_DIR, RUN_LOG_PATH, METHODOLOGY_PATH,
+  ZYLOS_DIR, DATA_DIR, CONFIG_PATH, STATE_PATH, LOG_DIR, RUN_LOG_PATH, METHODOLOGY_PATH,
   DEFAULT_CONFIG, SCHEDULE_QUESTIONS, POLICY_TEMPLATE,
   atomicWriteJson, ensureDir, expandHome, formatLocalTimestamp, formatTranscript, inspectPatternsFile,
   loadConfig, loadState, localTimeZone, normalizePolicyName, normalizeTaskName, parseC4Timestamp, parseDuration, readPolicy,
@@ -145,7 +147,7 @@ function policySummary(policy) {
   };
 }
 
-function commandFetch(args) {
+function commandLegacyFetch(args, fallbackReason) {
   const config = loadConfig();
   const task = normalizeTaskName(args.task);
   const policy = readPolicy(normalizePolicyName(args.policy));
@@ -171,6 +173,9 @@ function commandFetch(args) {
   const timeZone = localTimeZone();
   const window = { begin: formatLocalTimestamp(beginMs, timeZone), end: formatLocalTimestamp(endMs, timeZone), time_zone: timeZone, lookback: lookbackText };
   const base = {
+    mode: 'legacy_time_window',
+    fallback_reason: typeof fallbackReason === 'string' ? fallbackReason : materialFailureReason(fallbackReason),
+    fallback_detail: typeof fallbackReason === 'string' ? undefined : fallbackReason?.message,
     task,
     window,
     count: 0,
@@ -213,7 +218,7 @@ function commandFetch(args) {
   const inWindow = read.rows.filter(row => row._ms >= beginMs && row._ms <= endMs);
   const include = policy.channels === null ? null : new Set(policy.channels);
   const exclude = new Set(policy.exclude_channels);
-  const inScope = inWindow.filter(row => (include === null || include.has(row.channel)) && !exclude.has(row.channel));
+  const inScope = inWindow.filter(row => (include === null || include.has(row.channel)) && !exclude.has(row.channel) && !String(row.content ?? '').startsWith('[Scheduled Task:'));
   const capped = inScope.length > maxConversations;
   // Rows are oldest-first; when capping, keep the newest and leave out the oldest.
   const rows = capped ? inScope.slice(inScope.length - maxConversations) : inScope;
@@ -223,7 +228,8 @@ function commandFetch(args) {
     filtered_out: inWindow.length - inScope.length,
     truncated: capped || !read.complete,
     truncated_out: read.complete ? inScope.length - rows.length : null,
-    window_complete: read.complete
+    window_complete: read.complete,
+    report: { legacy: { count: rows.length, bytes: Buffer.byteLength(JSON.stringify(rows)), characters: rows.reduce((n, row) => n + [...String(row.content ?? '')].length, 0) } }
   };
 
   if (rows.length < minConversations) {
@@ -244,6 +250,77 @@ function commandFetch(args) {
   });
 }
 
+function scopeKey(args) { return `${normalizePolicyName(args.policy)}:${normalizeTaskName(args.task)}`; }
+function materialFile(id) {
+  if (!/^[a-f0-9-]{36}$/.test(id ?? '')) throw new Error('Invalid run id');
+  return path.join(DATA_DIR, 'materials', `${id}.json`);
+}
+function readRun(id) { return JSON.parse(fs.readFileSync(materialFile(id), 'utf8')); }
+function commandFetch(args) {
+  const config = loadConfig();
+  const policy = readPolicy(normalizePolicyName(args.policy));
+  if (config.enabled === false || policy.unconfigured || !policy.patterns_file) return commandLegacyFetch(args, 'checkpoint collection not started: disabled or unconfigured');
+  const state = loadState();
+  const key = scopeKey(args);
+  const scope = state.material_scopes?.[key] ?? {};
+  let run;
+  if (scope.active_run) run = readRun(scope.active_run);
+  else {
+    if (scope.write_pending) {
+      delete scope.write_pending;
+      state.material_scopes = { ...state.material_scopes, [key]: scope };
+      atomicWriteJson(STATE_PATH, state);
+    }
+    try {
+      run = collectMaterials(config, scope, { channels: policy.channels, exclude_channels: policy.exclude_channels });
+    } catch (err) {
+      return commandLegacyFetch(args, err);
+    }
+    run.scope = key;
+    if (run.ranges.length || scope.pending_clues?.length) {
+      saveArtifact(path.join(DATA_DIR, 'materials'), run, config.artifact_retention_days);
+      state.material_scopes = { ...state.material_scopes, [key]: { ...scope, active_run: run.run_id } };
+      atomicWriteJson(STATE_PATH, state);
+    }
+  }
+  const ready = run.ranges.length > 0 || scope.pending_clues?.length > 0;
+  outputJson({ status: ready ? 'ready' : 'skip', reason: ready ? null : 'no_checkpoint_progress', ...run, completed_groups: scope.completed_groups ?? [], ...policySummary(policy), filters: run.filters, methodology_file: METHODOLOGY_PATH, state_file: STATE_PATH, artifact_file: ready ? materialFile(run.run_id) : null });
+}
+function commandTrace(args) {
+  const run = readRun(optional(args, 'run'));
+  if (run.scope !== scopeKey(args)) throw new Error('Run belongs to another task/policy');
+  const state = loadState();
+  const scope = state.material_scopes?.[run.scope];
+  if (scope?.active_run !== run.run_id) throw new Error('Run is no longer active');
+  const file = optional(args, 'clues');
+  const clues = file ? JSON.parse(fs.readFileSync(file, 'utf8')) : [];
+  if (!Array.isArray(clues)) throw new Error('Clues must be a JSON array');
+  traceMaterials(loadConfig(), scope, run, clues);
+  saveArtifact(path.join(DATA_DIR, 'materials'), run, loadConfig().artifact_retention_days);
+  atomicWriteJson(STATE_PATH, state);
+  outputJson({ status: 'ready', run_id: run.run_id, trace_complete: run.trace_complete, traces: run.traces, report: run.trace_report, artifact_file: materialFile(run.run_id) });
+}
+
+function commandWrite(args) {
+  const policy = readPolicy(normalizePolicyName(args.policy));
+  if (policy.unconfigured || !policy.patterns_file) throw new Error('Pattern policy is unconfigured');
+  const file = optional(args, 'file'), sha256 = optional(args, 'sha256');
+  if (!file || !/^[a-f0-9]{64}$/.test(sha256 ?? '')) throw new Error('write requires --file and raw-byte --sha256');
+  const state = loadState(), key = scopeKey(args), scope = state.material_scopes?.[key] ?? {};
+  const runId = optional(args, 'run');
+  if (scope.active_run && runId !== scope.active_run) throw new Error('Pattern write requires the active --run');
+  if (runId && (readRun(runId).scope !== key || scope.active_run !== runId)) throw new Error('Run is no longer active for this task/policy');
+  // Persist refusal before invoking a writer so interrupted writes cannot advance.
+  scope.write_pending = runId ?? 'legacy';
+  state.material_scopes = { ...state.material_scopes, [key]: scope };
+  atomicWriteJson(STATE_PATH, state);
+  const result = writePatterns({ target: path.resolve(expandHome(policy.patterns_file)), file,
+    sha256, writer: expandHome(loadConfig().memory_writer), memoryRoot: path.join(ZYLOS_DIR, 'memory') });
+  if (result.status === 'updated') delete scope.write_pending;
+  atomicWriteJson(STATE_PATH, state);
+  outputJson(result);
+}
+
 function commandCommit(args) {
   const result = args.result;
   if (!['skip', 'no_change', 'updated'].includes(result)) {
@@ -251,7 +328,42 @@ function commandCommit(args) {
   }
   const task = normalizeTaskName(args.task);
   const policy = normalizePolicyName(args.policy);
-  const state = loadState();
+  let state = loadState();
+  const scope = state.material_scopes?.[scopeKey(args)];
+  const pending = scope?.write_pending;
+  if (result !== 'skip' && pending && pending === (optional(args, 'run') ?? scope.active_run ?? 'legacy')) throw new Error('Pattern write is pending; progress cannot advance until writing succeeds or this run is skipped');
+  let finishedRun;
+  let materialRun;
+  const runId = optional(args, 'run');
+  if (runId) {
+    const run = readRun(runId);
+    materialRun = run;
+    const key = scopeKey(args);
+    if (run.scope !== key || state.material_scopes?.[key]?.active_run !== runId) throw new Error('Run is no longer active for this task/policy');
+    if (run.deferred_clues) state.material_scopes[key].pending_clues = run.deferred_clues;
+    if (result !== 'skip') {
+      const done = state.material_scopes[key].completed_groups ?? [];
+      const groups = optional(args, 'groups')?.split(',') ?? run.ranges.map(r => r.session_group).filter(g => !done.includes(g));
+      const scope = commitMaterials(state.material_scopes[key], run, groups);
+      scope.completed_groups = [...new Set([...done, ...groups])];
+      if (run.ranges.every(r => scope.completed_groups.includes(r.session_group))) {
+        delete scope.active_run; delete scope.completed_groups;
+        run.committed = true;
+        finishedRun = run;
+      }
+      state = { ...state, material_scopes: { ...state.material_scopes, [key]: scope } };
+      // Keep immutable artifact ranges available to the sibling component.
+    } else {
+      delete state.material_scopes[key].active_run;
+      delete state.material_scopes[key].completed_groups;
+      run.closed = true;
+      finishedRun = run;
+    }
+  } else if (state.material_scopes?.[scopeKey(args)]?.active_run && result !== 'skip') {
+    throw new Error('Checkpoint commit requires --run from fetch');
+  }
+  // Only a skip that closes the run (or a run-less fallback) releases the guard.
+  if (result === 'skip' && scope && !scope.active_run) delete scope.write_pending;
   const now = new Date().toISOString();
   const windowEnd = optional(args, 'window-end');
   const lookback = optional(args, 'lookback');
@@ -265,6 +377,7 @@ function commandCommit(args) {
   if (result === 'updated') nextState.last_update_at = now;
 
   atomicWriteJson(STATE_PATH, nextState);
+  if (finishedRun) saveArtifact(path.join(DATA_DIR, 'materials'), finishedRun, loadConfig().artifact_retention_days);
   ensureDir(LOG_DIR);
   fs.appendFileSync(RUN_LOG_PATH, `${JSON.stringify({
     timestamp: now,
@@ -273,6 +386,9 @@ function commandCommit(args) {
     result,
     lookback,
     window_end: windowEnd,
+    report: materialRun?.report ?? {},
+    trace_report: materialRun?.trace_report ?? {},
+    pending_clues: nextState.material_scopes?.[scopeKey(args)]?.pending_clues?.length ?? 0,
     state_hash: crypto.createHash('sha256').update(JSON.stringify(nextState)).digest('hex')
   })}\n`);
 
@@ -335,13 +451,15 @@ function main() {
   const { command, args } = parseArgs(process.argv.slice(2));
   try {
     if (command === 'fetch') commandFetch(args);
+    if (command === 'trace') commandTrace(args);
+    if (command === 'write') commandWrite(args);
     if (command === 'commit') commandCommit(args);
     if (command === 'inspect') commandInspect(args);
     if (command === 'status') commandStatus(args);
     if (command === 'template') commandTemplate(args);
     outputJson({
       status: 'error',
-      error: 'Usage: extract.js fetch [--lookback 24h] [--task name] [--policy name] | commit --result <skip|no_change|updated> [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS +HH:MM"] | inspect [--policy name] | status [--policy name] | template [--policy | --policy name] [--lookback 24h] [--task name] [--cron "50 23 * * *"] [--json]'
+      error: 'Usage: extract.js fetch [--lookback 24h] [--task name] [--policy name] | trace --run UUID [--clues file.json] [--task name] [--policy name] | write --file DRAFT --sha256 HASH [--run UUID] [--task name] [--policy name] | commit --result <skip|no_change|updated> [--run UUID] [--groups G,H] [--task name] [--policy name] [--lookback 24h] [--window-end "YYYY-MM-DD HH:MM:SS +HH:MM"] | inspect [--policy name] | status [--policy name] | template [--policy | --policy name] [--lookback 24h] [--task name] [--cron "50 23 * * *"] [--json]'
     }, 1);
   } catch (err) {
     outputError(err.message);
