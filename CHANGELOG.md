@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-11-17
 
 ### Actions After Upgrading
 - Check `## Sources` in `~/zylos/components/thinking-patterns/policy.md`. If it explicitly says `Exclude channels: system, void` (the old template default), change it to `Exclude channels: internal, system, void, multica`, or delete that line to use the new default. Keep the old value only if you intentionally want internal messages and Multica reports. Otherwise, internal messages and development-agent reports will enter the material in large volumes. Upgrade hooks do not rewrite your policy.
