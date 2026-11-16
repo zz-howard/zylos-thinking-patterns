@@ -57,14 +57,30 @@ test('real Core checkpoints bound each group and preserve the unprocessed tail',
 // path changes; skip unrelated identity/scheduler work.
 test('real Core single-session checkpoints select the legacy session log directory', t => {
   const f = checkpointFixture(t);
-  f.row(1, '*', 'legacy single-session');
-  f.checkpoint(1, '*', 1, 1);
-  const log = path.join(f.env.ZYLOS_DIR, 'memory/sessions/2026-11-16.md');
+  fs.writeFileSync(path.join(f.env.ZYLOS_DIR, '.zylos/config.json'), '{"runtime":"codex","session_mode":"single"}');
+  fs.mkdirSync(path.join(f.env.ZYLOS_DIR, '.claude/skills/telegram'), { recursive: true });
+  const dbModule = pathToFileURL(f.config.c4_db_cli).href;
+  const writer = spawnSync(process.execPath, ['--input-type=module', '-e', `import * as db from ${JSON.stringify(dbModule)};
+    const row=db.insertConversation('in','telegram','room','single-session human');
+    db.claimConversation(row.id); db.markDelivered(row.id);
+    db.createCheckpoint('*',row.id,'digested');
+    console.log(JSON.stringify(row)); db.close();`], { env: f.env, encoding: 'utf8', timeout: 10000 });
+  assert.equal(writer.status, 0, writer.stderr);
+  assert.equal(JSON.parse(writer.stdout).session_group, 'telegram');
+  const today = new Date().toISOString().slice(0, 10);
+  const log = path.join(f.env.ZYLOS_DIR, 'memory/sessions', `${today}.md`);
   fs.mkdirSync(path.dirname(log), { recursive: true });
   fs.writeFileSync(log, 'legacy session log');
-  const result = execute(f, `console.log(JSON.stringify(materials.collectMaterials(${JSON.stringify(f.config)}, {}, {zylos_dir:process.env.ZYLOS_DIR,time_zone:'UTC',now:Date.parse('2026-11-16T02:00:00Z')})));`);
+  const result = execute(f, `const config=${JSON.stringify(f.config)};
+    const run=materials.collectMaterials(config, {}, {zylos_dir:process.env.ZYLOS_DIR,time_zone:'UTC'});
+    materials.traceMaterials(config, {}, run, [{session_group:run.inbound[0].session_group,c4_id:run.inbound[0].id,kind:'correction'}]);
+    console.log(JSON.stringify(run));`);
   assert.equal(result.ranges.length, 1);
   assert.equal(result.ranges[0].session_group, '*');
   assert.equal(result.inbound.length, 1);
+  assert.equal(result.inbound[0].session_group, 'telegram');
   assert.ok(result.session_files.includes(log));
+  assert.equal(result.traces.length, 1);
+  assert.equal(result.traces[0].clue.session_group, '*');
+  assert.equal(result.traces[0].rows[0].session_group, 'telegram');
 });

@@ -182,8 +182,9 @@ test('Core without projection reads plain history byte identically to the main b
   assert.equal(result.methodology_file, path.join(ROOT, 'references/methodology.md'));
   assert.equal(previousResult.methodology_file, path.join(dir, 'references/methodology.md'));
   assert.equal(result.mode, 'legacy_time_window');
-  assert.ok(result.fallback_reason);
-  const { methodology_file: currentPath, mode, fallback_reason, report, ...currentFields } = result;
+  assert.equal(result.fallback_reason, 'checkpoints_unsupported');
+  assert.match(result.fallback_detail, /C4 CLI failed/);
+  const { methodology_file: currentPath, mode, fallback_reason, fallback_detail, report, ...currentFields } = result;
   const { methodology_file: previousPath, ...previousFields } = previousResult;
   assert.equal(JSON.stringify(currentFields), JSON.stringify(previousFields));
   assert.equal(result.status, 'ready');

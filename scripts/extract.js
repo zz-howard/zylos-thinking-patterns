@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { collectMaterials, traceMaterials, commitMaterials, saveArtifact } from './materials.js';
+import { collectMaterials, traceMaterials, commitMaterials, saveArtifact, materialFailureReason } from './materials.js';
 import {
   DATA_DIR, CONFIG_PATH, STATE_PATH, LOG_DIR, RUN_LOG_PATH, METHODOLOGY_PATH,
   DEFAULT_CONFIG, SCHEDULE_QUESTIONS, POLICY_TEMPLATE,
@@ -173,7 +173,8 @@ function commandLegacyFetch(args, fallbackReason) {
   const window = { begin: formatLocalTimestamp(beginMs, timeZone), end: formatLocalTimestamp(endMs, timeZone), time_zone: timeZone, lookback: lookbackText };
   const base = {
     mode: 'legacy_time_window',
-    fallback_reason: fallbackReason,
+    fallback_reason: typeof fallbackReason === 'string' ? fallbackReason : materialFailureReason(fallbackReason),
+    fallback_detail: typeof fallbackReason === 'string' ? undefined : fallbackReason?.message,
     task,
     window,
     count: 0,
@@ -267,16 +268,17 @@ function commandFetch(args) {
     try {
       run = collectMaterials(config, scope, { channels: policy.channels, exclude_channels: policy.exclude_channels });
     } catch (err) {
-      return commandLegacyFetch(args, err.message);
+      return commandLegacyFetch(args, err);
     }
     run.scope = key;
-    saveArtifact(path.join(DATA_DIR, 'materials'), run, config.artifact_retention_days);
-    if (run.ranges.length) {
+    if (run.ranges.length || scope.pending_clues?.length) {
+      saveArtifact(path.join(DATA_DIR, 'materials'), run, config.artifact_retention_days);
       state.material_scopes = { ...state.material_scopes, [key]: { ...scope, active_run: run.run_id } };
       atomicWriteJson(STATE_PATH, state);
     }
   }
-  outputJson({ status: run.ranges.length ? 'ready' : 'skip', reason: run.ranges.length ? null : 'no_checkpoint_progress', ...run, completed_groups: scope.completed_groups ?? [], ...policySummary(policy), methodology_file: METHODOLOGY_PATH, state_file: STATE_PATH, artifact_file: materialFile(run.run_id) });
+  const ready = run.ranges.length > 0 || scope.pending_clues?.length > 0;
+  outputJson({ status: ready ? 'ready' : 'skip', reason: ready ? null : 'no_checkpoint_progress', ...run, completed_groups: scope.completed_groups ?? [], ...policySummary(policy), methodology_file: METHODOLOGY_PATH, state_file: STATE_PATH, artifact_file: ready ? materialFile(run.run_id) : null });
 }
 function commandTrace(args) {
   const run = readRun(optional(args, 'run'));
@@ -290,7 +292,7 @@ function commandTrace(args) {
   traceMaterials(loadConfig(), scope, run, clues);
   saveArtifact(path.join(DATA_DIR, 'materials'), run, loadConfig().artifact_retention_days);
   atomicWriteJson(STATE_PATH, state);
-  outputJson({ status: 'ready', run_id: run.run_id, trace_complete: run.trace_complete, traces: run.trace_report.clues ? run.traces.slice(-run.trace_report.clues) : [], report: run.trace_report, artifact_file: materialFile(run.run_id) });
+  outputJson({ status: 'ready', run_id: run.run_id, trace_complete: run.trace_complete, traces: run.traces, report: run.trace_report, artifact_file: materialFile(run.run_id) });
 }
 
 function commandCommit(args) {
@@ -309,6 +311,7 @@ function commandCommit(args) {
     materialRun = run;
     const key = scopeKey(args);
     if (run.scope !== key || state.material_scopes?.[key]?.active_run !== runId) throw new Error('Run is no longer active for this task/policy');
+    if (run.deferred_clues) state.material_scopes[key].pending_clues = run.deferred_clues;
     if (result !== 'skip') {
       const done = state.material_scopes[key].completed_groups ?? [];
       const groups = optional(args, 'groups')?.split(',') ?? run.ranges.map(r => r.session_group).filter(g => !done.includes(g));
@@ -321,6 +324,11 @@ function commandCommit(args) {
       }
       state = { ...state, material_scopes: { ...state.material_scopes, [key]: scope } };
       // Keep immutable artifact ranges available to the sibling component.
+    } else {
+      delete state.material_scopes[key].active_run;
+      delete state.material_scopes[key].completed_groups;
+      run.closed = true;
+      finishedRun = run;
     }
   } else if (state.material_scopes?.[scopeKey(args)]?.active_run && result !== 'skip') {
     throw new Error('Checkpoint commit requires --run from fetch');

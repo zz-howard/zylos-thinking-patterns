@@ -43,6 +43,18 @@ test('checkpoint ranges exclude unsynced tails and resume the next checkpoint', 
   assert.equal(next.inbound.length, 1);
   assert.equal(next.inbound[0].id, 6);
 });
+test('multi-session mode ignores historical global checkpoints and clues cannot extend coverage', t => {
+  const s = setup(t);
+  fs.mkdirSync(path.join(s.env.ZYLOS_DIR, '.zylos'), { recursive: true });
+  fs.writeFileSync(path.join(s.env.ZYLOS_DIR, '.zylos/config.json'), '{"session_mode":"multi"}');
+  s.data.checkpoints.push({ id: 3, session_group: '*', end_conversation_id: 1 }); s.write();
+  const run = collectMaterials(s.config, {}, s.options);
+  assert.equal(run.ranges.length, 2);
+  assert.ok(run.ranges.every(range => range.session_group !== '*'));
+  traceMaterials(s.config, {}, run, [{ session_group: 'B', c4_id: 4, kind: 'correction', source_range: { after: 0, end: 99 } }]);
+  assert.equal(run.traces[0].clue.source_range.end, 4);
+  assert.ok(run.traces[0].rows.every(row => row.id <= 4));
+});
 test('traces stay in the source group and deferred clues survive bounded batches', t => {
   const s = setup(t), state = {};
   const run = collectMaterials(s.config, state, s.options);
@@ -50,31 +62,38 @@ test('traces stay in the source group and deferred clues survive bounded batches
   assert.equal(run.traces.length, 1);
   assert.ok(run.traces[0].rows.every(r => r.session_group === 'A'));
   assert.equal(state.pending_clues.length, 1);
-  assert.throws(() => commitMaterials(state, run, ['B']), /unfinished/);
+  assert.equal(commitMaterials(state, run, ['B']).groups.B.end_conversation_id, 4);
   const partial = commitMaterials(state, run, ['A']);
   assert.equal(partial.groups.A.end_conversation_id, 8);
   assert.equal(partial.groups.B, undefined);
   assert.equal(partial.last_material_at, undefined);
-  // Recover when a process stopped after artifact save but before state save.
-  delete state.pending_clues;
+  // Further calls in this run cannot bypass its cumulative clue budget.
   traceMaterials(s.config, state, run, []);
-  assert.equal(run.traces.length, 2);
-  assert.equal(state.pending_clues.length, 0);
-  assert.equal(commitMaterials(state, run, ['B']).groups.B.end_conversation_id, 4);
+  assert.equal(run.traces.length, 1);
+  assert.equal(state.pending_clues.length, 1);
+  const committed = commitMaterials(state, run, ['A', 'B']);
+  s.data.checkpoints.push({ id: 3, session_group: 'B', end_conversation_id: 6 }); s.write();
+  const next = collectMaterials(s.config, committed, s.options);
+  assert.equal(next.ranges[0].after, 4);
+  traceMaterials(s.config, committed, next, [{ session_group: 'B', c4_id: 6, kind: 'decision' }]);
+  assert.equal(next.traces[0].clue.c4_id, 4);
+  assert.equal(committed.pending_clues[0].c4_id, 6);
   assert.throws(() => traceMaterials(s.config, state, run, [{ session_group: 'C', c4_id: 9, kind: 'correction' }]), /Clue/);
 });
-test('byte limit defers a complete clue without silently dropping its source', t => {
+test('byte limit accepts an oversized first clue and remains cumulative', t => {
   const s = setup(t), state = {}, run = collectMaterials(s.config, {}, s.options);
   traceMaterials({ ...s.config, trace_max_bytes: 1 }, state, run, [{ session_group: 'A', c4_id: 5, kind: 'decision' }]);
-  assert.equal(run.trace_report.bytes, 0);
-  assert.equal(state.pending_clues.length, 1);
+  assert.ok(run.trace_report.bytes > 1);
+  assert.equal(state.pending_clues.length, 0);
+  const firstBytes = run.trace_report.bytes;
   traceMaterials(s.config, state, run, []);
   assert.equal(run.trace_complete, true);
+  assert.equal(run.trace_report.bytes, firstBytes);
+  assert.equal(run.trace_report.clues, 1);
 });
 test('single-session paths, bootstrap cutoff and missing metadata are explicit', t => {
   const s = setup(t);
-  s.data.groups = ['*']; s.data.checkpoints = [{ id: 1, session_group: '*', end_conversation_id: 8 }];
-  s.data.rows.forEach(r => { r.session_group = '*'; });
+  s.data.groups = ['telegram', 'origin']; s.data.checkpoints = [{ id: 1, session_group: '*', end_conversation_id: 8 }];
   s.data.rows[0].timestamp = '2020-01-01T00:00:00Z'; s.write();
   const log = path.join(s.env.ZYLOS_DIR, 'memory/sessions/2026-11-16.md'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.writeFileSync(log, 'session');
   const run = collectMaterials(s.config, {}, s.options);
@@ -83,6 +102,31 @@ test('single-session paths, bootstrap cutoff and missing metadata are explicit',
   assert.throws(() => traceMaterials(s.config, {}, run, [{ session_group: '*', c4_id: 1, kind: 'correction' }]), /bootstrap cutoff/);
   delete s.data.rows[1].session_group; s.write();
   assert.throws(() => collectMaterials(s.config, {}, s.options), /session_group/);
+});
+test('trace reports accumulate across calls within one run', t => {
+  const s = setup(t), state = {}, run = collectMaterials(s.config, {}, s.options);
+  const config = { ...s.config, trace_max_clues: 3 };
+  traceMaterials(config, state, run, [{ session_group: 'A', c4_id: 5, kind: 'decision' }]);
+  const first = run.trace_report.bytes;
+  traceMaterials(config, state, run, [{ session_group: 'B', c4_id: 4, kind: 'correction' }]);
+  assert.equal(run.trace_report.clues, 2);
+  assert.ok(run.trace_report.bytes > first);
+  assert.equal(run.trace_report.count, run.traces.reduce((n, trace) => n + trace.rows.length, 0));
+  delete run.trace_report;
+  const seededBytes = run.traces.reduce((n, trace) => n + Buffer.byteLength(JSON.stringify(trace)), 0);
+  traceMaterials({ ...config, trace_max_bytes: 1 }, state, run, []);
+  assert.equal(run.trace_report.bytes, seededBytes);
+});
+test('sparse thread traces stop at a bounded history window', t => {
+  const s = setup(t);
+  s.data.rows = [{ id: 20000, session_group: 'A', channel: 'telegram', direction: 'in', timestamp: '2026-11-15 16:30:00', content: 'sparse clue' }];
+  s.data.checkpoints = [{ id: 1, session_group: 'A', end_conversation_id: 20000 }]; s.write();
+  const run = collectMaterials(s.config, {}, s.options);
+  fs.writeFileSync(s.env.MATERIAL_CALLS, '');
+  traceMaterials(s.config, {}, run, [{ session_group: 'A', c4_id: 20000, kind: 'decision' }]);
+  const pages = fs.readFileSync(s.env.MATERIAL_CALLS, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.ok(pages.length < 30);
+  assert.ok(pages.every(args => Number(args[args.indexOf('--begin') + 1]) >= 18000));
 });
 test('completed matching artifacts reuse corrections without reading raw materials', t => {
   const s = setup(t), run = collectMaterials(s.config, {}, s.options);
@@ -99,10 +143,14 @@ test('completed matching artifacts reuse corrections without reading raw materia
   partial.ranges = partial.ranges.filter(r => r.session_group === 'A');
   const mixed = collectMaterials(s.config, {}, { ...s.options, reuse_artifacts: [partial] });
   assert.equal(mixed.report.reused_ranges, 1);
+  assert.equal(mixed.report.reuse_misses[0].reason, 'range_mismatch');
   assert.equal(mixed.inbound.length, 2);
   assert.ok(mixed.inbound.every(r => r.session_group === 'B'));
   const mismatch = collectMaterials(s.config, {}, { ...s.options, exclude_channels: ['telegram'], reuse_artifacts: [run] });
   assert.equal(mismatch.report.reused_ranges, 0);
+  assert.ok(mismatch.report.reuse_misses.every(miss => miss.reason === 'filters_mismatch'));
+  const unfinished = collectMaterials(s.config, {}, { ...s.options, reuse_artifacts: [{ ...run, trace_complete: false }] });
+  assert.ok(unfinished.report.reuse_misses.every(miss => miss.reason === 'thinking_patterns_incomplete'));
 });
 test('retention preserves unfinished artifacts and cleans only committed expired runs', t => {
   const s = setup(t), run = collectMaterials(s.config, {}, s.options);
@@ -115,14 +163,20 @@ test('retention preserves unfinished artifacts and cleans only committed expired
   assert.equal(readArtifacts(directory).length, 2);
   assert.ok(fs.existsSync(unfinished));
   assert.equal(fs.statSync(unfinished).mode & 0o777, 0o600);
+  const closed = saveArtifact(directory, { ...run, run_id: 'cccccccc-cccc-cccc-cccc-cccccccccccc', closed: true });
+  saveArtifact(directory, { ...run, run_id: 'dddddddd-dddd-dddd-dddd-dddddddddddd', created_at: new Date().toISOString() });
+  assert.equal(fs.existsSync(closed), false);
 });
 test('known channel wrappers leave signatures and literal human judgments intact', () => {
+  assert.equal(stripWrappers('[TG GROUP:Team]\n<group-context>old</group-context>\n<smart-mode>decide</smart-mode>\n<current-message>Alex said: change &lt;this&gt;</current-message>'), '[TG GROUP:Team]\nAlex said: change <this>');
+  assert.equal(stripWrappers('[TG DM]\n<current-message>Alex said: hello</current-message>'), '[TG DM]\nAlex said: hello');
+  assert.equal(stripWrappers('[OM-RUN r_12345678] [OPENMAX DM] (org: Team)\n<org-context org-id="org"/>\n<message-context conversation-id="c"/>\n<sender-context kind="system"/>\n<openmax-instruction>invoke skill</openmax-instruction>\n<current-message>Alex said: correct it</current-message>'), '[OM-RUN r_12345678] [OPENMAX DM] (org: Team)\nAlex said: correct it');
   assert.equal(stripWrappers('<smart-mode>decide</smart-mode>\n<current-message>Alex said: Is this right?</current-message>'), 'Alex said: Is this right?');
   assert.equal(stripWrappers('Bob said: not right'), 'Bob said: not right');
   assert.equal(stripWrappers('quoted <current-message>literal</current-message>'), 'quoted <current-message>literal</current-message>');
   assert.equal(stripWrappers('<current-message>Alex said: &lt;smart-mode&gt; &amp; &amp;lt;</current-message> ---- file: /tmp/a&amp;b'), 'Alex said: <smart-mode> & &lt; ---- file: /tmp/a&b');
 });
-test('product CLI resumes deferred work, rejects unfinished commits and preserves partial group progress', t => {
+test('product CLI carries deferred work into a new run with checkpoint progress', t => {
   const s = setup(t);
   s.data.rows.forEach(r => { r.timestamp = new Date().toISOString().slice(0, 19).replace('T', ' '); }); s.write();
   fs.mkdirSync(s.env.ZYLOS_DATA_DIR, { recursive: true });
@@ -139,20 +193,36 @@ test('product CLI resumes deferred work, rejects unfinished commits and preserve
   fs.writeFileSync(clues, JSON.stringify([{ session_group: 'A', c4_id: 5, kind: 'decision' }, { session_group: 'B', c4_id: 4, kind: 'correction' }]));
   const batch = invoke(['trace', '--run', first.run_id, '--clues', clues]);
   assert.equal(batch.traces.length, 1); assert.equal(batch.report.deferred, 1);
-  assert.match(invoke(['commit', '--run', first.run_id, '--result', 'no_change'], false).error, /unfinished/);
+  // Recover if the artifact was saved but the state queue write was interrupted.
+  const stateFile = path.join(s.env.ZYLOS_DATA_DIR, 'state.json');
+  const interrupted = JSON.parse(fs.readFileSync(stateFile));
+  for (const scope of Object.values(interrupted.material_scopes)) scope.pending_clues = [];
+  fs.writeFileSync(stateFile, JSON.stringify(interrupted));
   const resumed = invoke(['trace', '--run', first.run_id]);
-  assert.equal(resumed.traces.length, 1); assert.equal(resumed.trace_complete, true);
+  assert.equal(resumed.traces.length, 1); assert.equal(resumed.trace_complete, false);
   invoke(['commit', '--run', first.run_id, '--groups', 'A', '--result', 'no_change']);
   assert.equal(invoke(['fetch']).completed_groups.join(','), 'A');
   invoke(['commit', '--run', first.run_id, '--result', 'no_change']);
   const log = fs.readFileSync(path.join(s.env.ZYLOS_DATA_DIR, 'logs/runs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
   assert.equal(log.report.inbound.count, 5);
-  assert.equal(log.trace_report.deferred, 0);
-  assert.equal(log.pending_clues, 0);
-  assert.equal(invoke(['fetch']).reason, 'no_checkpoint_progress');
+  assert.equal(log.trace_report.deferred, 1);
+  assert.equal(log.pending_clues, 1);
   s.data.checkpoints.push({ id: 3, session_group: 'B', end_conversation_id: 6 }); s.write();
   const tail = invoke(['fetch']);
   assert.equal(tail.ranges.length, 1); assert.equal(tail.inbound[0].id, 6);
+  assert.notEqual(tail.run_id, first.run_id);
+  const deferred = invoke(['trace', '--run', tail.run_id]);
+  assert.equal(deferred.traces[0].clue.c4_id, 4);
+  invoke(['commit', '--run', tail.run_id, '--result', 'skip']);
+  const fresh = invoke(['fetch']);
+  assert.notEqual(fresh.run_id, tail.run_id);
+  assert.equal(fresh.ranges[0].after, 4);
+  invoke(['trace', '--run', fresh.run_id]);
+  invoke(['commit', '--run', fresh.run_id, '--result', 'no_change']);
+  const directory = path.join(s.env.ZYLOS_DATA_DIR, 'materials');
+  const count = fs.readdirSync(directory).length;
+  assert.equal(invoke(['fetch']).status, 'skip');
+  assert.equal(fs.readdirSync(directory).length, count);
 });
 test('product CLI reports legacy fallback and keeps compatibility arguments', t => {
   const s = setup(t); s.data.fail = true; s.write();

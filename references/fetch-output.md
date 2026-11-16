@@ -28,13 +28,16 @@ The last includes the owner's required action.
 
 `trace --run UUID --clues file.json --task daily` reads an agent-selected array
 with `session_group`, `c4_id`, and `kind` (`decision` or `correction`). Output
-contains accumulated traces, `trace_complete`, artifact path and batch report
+contains accumulated traces, `trace_complete`, artifact path and cumulative report
 with message count, characters, bytes, processed and deferred clues. Only the
 source group and allowed channels appear; context includes both directions.
-Resume deferred clues without `--clues`, in this or the next schedule.
+Commit processed ranges after clue selection. Deferred clues are processed first
+in the next run, together with new checkpoint material; run limits do not reset
+between trace calls.
 
 `commit --run UUID --result updated|no_change --task daily [--groups G,H]`
-requires finished selection/traces and advances selected groups only. Stale or
+requires finished clue selection and advances selected groups only. Deferred
+traces remain queued independently. Stale or
 unfinished ranges are rejected. `skip` never advances progress.
 
 ## Legacy Time Window
