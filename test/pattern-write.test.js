@@ -279,3 +279,36 @@ test('a real writer path rejection defers without direct fallback or progress', 
   assert.equal(f.commit('updated').status, 'error');
   assert.equal(f.state().material_scopes['default:daily'].groups[GROUP].end_conversation_id, 10);
 });
+
+test('a same-length in-place rewrite of an existing entry is rejected', t => {
+  const f = fixture(t);
+  const changed = f.write(ORIGINAL.replace('Preserve the original', 'Conserve the original'));
+  assert.equal(changed.status, 'error');
+  assert.equal(fs.readFileSync(f.patterns, 'utf8'), ORIGINAL);
+});
+test('direct fallback refuses a stale hash and keeps the file', t => {
+  const f = fixture(t, { writer: false });
+  const result = f.write(ORIGINAL + NEW_ENTRY, hash('stale bytes'));
+  assert.equal(result.status, 'write_deferred');
+  assert.equal(result.reason, 'MEMORY_CONFLICT');
+  assert.equal(fs.readFileSync(f.patterns, 'utf8'), ORIGINAL);
+});
+test('during an active run, write without --run is refused before any publication', t => {
+  const f = fixture(t, { writer: false });
+  const result = f.write(ORIGINAL + NEW_ENTRY, undefined, { run: false });
+  assert.equal(result.status, 'error');
+  assert.equal(fs.readFileSync(f.patterns, 'utf8'), ORIGINAL);
+  assert.equal(f.state().material_scopes['default:daily'].write_pending, undefined);
+});
+test('the write guard is on disk before the writer runs (writer kills its caller)', t => {
+  const f = fixture(t);
+  const killer = path.join(f.root, 'killer.mjs');
+  fs.writeFileSync(killer, 'process.kill(process.ppid, "SIGKILL");\n');
+  const config = path.join(f.env.ZYLOS_DATA_DIR, 'config.json');
+  fs.writeFileSync(config, JSON.stringify({ ...JSON.parse(fs.readFileSync(config, 'utf8')), memory_writer: killer }));
+  const draft = path.join(f.root, 'draft.md'); fs.writeFileSync(draft, ORIGINAL + NEW_ENTRY);
+  const child = spawnSync(process.execPath, [CLI, 'write', '--file', draft, '--sha256', hash(ORIGINAL), '--task', 'daily', '--run', RUN], { cwd: ROOT, env: f.env, encoding: 'utf8', timeout: 20000 });
+  assert.equal(child.signal, 'SIGKILL');
+  assert.equal(f.state().material_scopes['default:daily'].write_pending, RUN);
+  assert.equal(f.commit('no_change').status, 'error');
+});

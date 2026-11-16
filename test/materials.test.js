@@ -238,3 +238,35 @@ test('product CLI reports legacy fallback and keeps compatibility arguments', t 
   assert.equal(output.mode, 'legacy_time_window');
   assert.match(output.fallback_reason, /checkpoints/);
 });
+
+test('policy channel include list applies to checkpoint inbound', t => {
+  const s = setup(t);
+  const run = collectMaterials(s.config, {}, { ...s.options, channels: ['telegram'] });
+  assert.ok(run.inbound.length > 0);
+  assert.ok(run.inbound.every(r => r.channel === 'telegram'), run.inbound.map(r => r.channel).join(','));
+});
+test('a range spanning several pages reads every id across page boundaries', t => {
+  const s = setup(t);
+  s.data.rows = Array.from({ length: 1200 }, (_, i) => ({ id: i + 1, session_group: 'A', channel: 'telegram', direction: 'in', timestamp: '2026-11-15 16:30:00', content: `m${i + 1}` }));
+  s.data.checkpoints = [{ id: 1, session_group: 'A', end_conversation_id: 1200 }]; s.data.groups = ['A']; s.write();
+  const run = collectMaterials(s.config, { groups: { A: { end_conversation_id: 0, checkpoint_id: 0 } } }, s.options);
+  const ids = new Set(run.inbound.map(r => r.id));
+  assert.equal(ids.size, 1200);
+  assert.ok(ids.has(500) && ids.has(1000));
+});
+test('an artifact with unfinished tracing is never reused', t => {
+  const s = setup(t), run = collectMaterials(s.config, {}, s.options);
+  traceMaterials(s.config, {}, run, []);
+  const unfinished = collectMaterials(s.config, {}, { ...s.options, reuse_artifacts: [{ ...run, trace_complete: false }] });
+  assert.equal(unfinished.report.reused_ranges, 0);
+  assert.equal(unfinished.report.reuse_misses.length, 2);
+});
+test('an artifact with the same end but a later start is not reused', t => {
+  const s = setup(t), run = collectMaterials(s.config, {}, s.options);
+  traceMaterials(s.config, {}, run, []);
+  const shorter = structuredClone(run);
+  shorter.ranges.find(r => r.session_group === 'A').after = 5;
+  const next = collectMaterials(s.config, {}, { ...s.options, reuse_artifacts: [shorter] });
+  assert.ok(next.report.reuse_misses.some(m => m.session_group === 'A' && m.reason === 'range_mismatch'));
+  assert.ok(next.inbound.some(r => r.session_group === 'A' && r.id === 1));
+});
