@@ -103,19 +103,31 @@ export function collectMaterials(config, state = {}, options = {}) {
     // producer must have finished clue selection (trace records it, even for []).
     const sameRange = (options.reuse_artifacts ?? []).filter(a => a.ranges?.some(r => r.session_group === group && r.after === after && r.end === end));
     const sameFilters = sameRange.filter(a => JSON.stringify(a.filters) === JSON.stringify(filters));
+    const reuseFrom = (artifact, source) => {
+      const within = c => c.session_group === group && c.kind === 'correction' && c.c4_id > after && c.c4_id <= source.end;
+      return { clues: [...new Map([...(artifact.clues ?? []), ...(artifact.deferred_clues ?? [])].filter(within).map(c => [c.c4_id, { ...c, source_range: source }])).values()],
+        traces: (artifact.traces ?? []).filter(t => within(t.clue)) };
+    };
     const cached = sameFilters.find(a => a.trace_report);
     if (cached) {
       const source = cached.ranges.find(r => r.session_group === group && r.after === after && r.end === end);
-      const within = c => c.session_group === group && c.kind === 'correction' && c.c4_id > after && c.c4_id <= end;
-      const clues = [...new Map([...(cached.clues ?? []), ...(cached.deferred_clues ?? [])].filter(within).map(c => [c.c4_id, { ...c, source_range: source }])).values()];
-      const traces = (cached.traces ?? []).filter(t => within(t.clue));
       ranges.push({ ...source, ...range });
-      reused.push({ range, clues, traces });
+      reused.push({ range, ...reuseFrom(cached, source) });
       continue;
     }
-    if (options.reuse_artifacts) reuseMisses.push({ session_group: group, reason: !sameRange.length ? 'range_mismatch' : !sameFilters.length ? 'filters_mismatch' : 'clue_selection_unfinished' });
+    // A checkpoint between producer and consumer runs extends the range: reuse
+    // the producer's longest matching prefix and collect only the newer tail.
+    // A first run keeps the bootstrap time window instead.
+    const prefix = previous.end_conversation_id !== undefined && (options.reuse_artifacts ?? []).filter(a => a.trace_report && JSON.stringify(a.filters) === JSON.stringify(filters))
+      .flatMap(a => (a.ranges ?? []).filter(r => r.session_group === group && r.after === after && Number.isSafeInteger(r.end) && r.end > after && r.end < end).map(source => ({ a, source })))
+      .reduce((best, item) => !best || item.source.end > best.source.end ? item : best, null);
+    if (prefix) {
+      range.reused_through = prefix.source.end;
+      reused.push({ range: { ...prefix.source, session_group: group, after }, partial: true, ...reuseFrom(prefix.a, prefix.source) });
+    } else if (options.reuse_artifacts) reuseMisses.push({ session_group: group, reason: !sameRange.length ? 'range_mismatch' : !sameFilters.length ? 'filters_mismatch' : 'clue_selection_unfinished' });
     let rows;
-    if (previous.end_conversation_id === undefined) {
+    if (prefix) rows = rangeRows(config, prefix.source.end + 1, end, group);
+    else if (previous.end_conversation_id === undefined) {
       // Bootstrap uses the CLI time query to avoid reading historical backlog.
       bootstrapRows ??= cliJson(config.c4_fetch_cli, ['--since', new Date(now - 86400000).toISOString()], config.max_page_bytes).rows;
       if (!Array.isArray(bootstrapRows) || bootstrapRows.some(row => typeof row.session_group !== 'string')) throw new Error('C4 rows lack session_group metadata');
@@ -128,7 +140,8 @@ export function collectMaterials(config, state = {}, options = {}) {
     for (const file of memoryFiles(root, group, rows, zone)) sessions.add(file);
     inbound.push(...rows.filter(row => row.direction === 'in' && allowed(row, options) && !String(row.content ?? '').startsWith('[Scheduled Task:')).map(row => ({ ...row, content: stripWrappers(row.content) })));
   }
-  const snapshot = ranges.length && reused.length !== ranges.length ? captureReferences(root) : undefined;
+  const fullyReused = reused.filter(item => !item.partial).length;
+  const snapshot = ranges.length && fullyReused !== ranges.length ? captureReferences(root) : undefined;
   const changes = snapshot === undefined ? [] : referenceChanges(root, state.reference_baseline, snapshot);
   const baselineNote = snapshot !== undefined && state.reference_baseline === undefined ? 'Initial reference baseline established; no reference content emitted.' : null;
   const references = [...new Set(changes.map(change => change.file))];
@@ -136,7 +149,7 @@ export function collectMaterials(config, state = {}, options = {}) {
   const fileReport = files => ({ count: files.length, bytes: files.reduce((n, file) => n + fs.statSync(file).size, 0), characters: files.reduce((n, file) => n + [...fs.readFileSync(file, 'utf8')].length, 0) });
   return { schema_version: 1, run_id: crypto.randomUUID(), mode: 'checkpoints', created_at: new Date(now).toISOString(), time_zone: zone, ranges, session_files: sessionFiles, reference_files: references, inbound, reused,
     filters, reference_snapshot: snapshot, reference_changes: changes, reference_baseline_note: baselineNote,
-    report: { inbound: measure(inbound), sessions: fileReport(sessionFiles), references: { ...measure(changes), baseline_note: baselineNote }, reused_ranges: reused.length, supplemental_traces: 0, collected_ranges: ranges.length - reused.length, reuse_misses: reuseMisses }, clues: [], traces: [], trace_complete: false };
+    report: { inbound: measure(inbound), sessions: fileReport(sessionFiles), references: { ...measure(changes), baseline_note: baselineNote }, reused_ranges: fullyReused, partially_reused_ranges: reused.length - fullyReused, supplemental_traces: 0, collected_ranges: ranges.length - reused.length, reuse_misses: reuseMisses }, clues: [], traces: [], trace_complete: false };
 }
 export function traceMaterials(config, state, run, clues = []) {
   const settings = { ...MATERIAL_DEFAULTS, ...config };
@@ -194,7 +207,7 @@ export function traceMaterials(config, state, run, clues = []) {
   run.traces = [...(run.traces ?? []), ...traces];
   run.trace_complete = deferred.length === 0;
   run.trace_report = { clues: run.traces.length, deferred: deferred.length, bytes: run.traces.reduce((n, t) => n + Buffer.byteLength(JSON.stringify(t)), 0), collected_bytes: bytes, characters: run.traces.reduce((n, t) => n + (t.report?.characters ?? 0), 0), count: run.traces.reduce((n, t) => n + t.rows.length, 0) };
-  run.report.supplemental_traces = run.traces.filter(t => !reusedTraceKeys.has(key(t.clue)) && (run.reused ?? []).some(item => item.range.session_group === t.clue.session_group)).length;
+  run.report.supplemental_traces = run.traces.filter(t => !reusedTraceKeys.has(key(t.clue)) && (run.reused ?? []).some(item => item.clues.some(c => key(c) === key(t.clue)))).length;
   return run;
 }
 export function commitMaterials(state, run, completedGroups) {
