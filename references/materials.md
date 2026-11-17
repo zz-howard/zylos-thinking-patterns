@@ -27,8 +27,9 @@ Default retention is seven days (`artifact_retention_days`). Only completed
 expired artifacts marked `committed` or `closed` are removed. Active runs and deferred clues remain
 until processed. Artifacts require local access and are never published.
 
-Identity-reflection reuses correction clues/traces only for exact matching
-completed group ranges and filters. Unmatched ranges are collected independently.
+Identity-reflection reuses correction clues/traces per thread for exact matching
+ranges and filters once clue selection has run (`trace_report` present), even if
+some clues were deferred; it traces deferred corrections itself. Unmatched ranges are collected independently.
 Inbound collection rejects only stored content starting with `[Scheduled Task:` before wrapper extraction, including in legacy time-window mode. The marker elsewhere is retained. Trace context is unchanged. Older artifacts without `filters.exclude_scheduled_tasks: true` fail filter matching and are recollected.
 Reuse reads checkpoints but skips raw rows/memory for covered ranges; reporting
 distinguishes reuse. Callers must select the intended policy/task artifacts.

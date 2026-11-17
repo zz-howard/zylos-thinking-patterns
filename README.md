@@ -39,7 +39,7 @@ node scripts/extract.js template --lookback 24h --task daily --cron '50 23 * * *
 3. Trace includes replies under clue/context/byte limits. Deferred work persists.
 4. Apply the methodology, publish a draft or hold according to confirmation, notify only
    the policy endpoint. Source attributions include group and C4 message ID.
-5. Commit finished ranges. Identity-reflection reuses matching correction traces.
+5. Commit finished ranges. Identity-reflection reuses matching correction traces per thread.
 
 New groups start from the latest day; unsynced tails wait for a checkpoint.
 Older Core uses explicit `legacy_time_window` fallback with a reason. Only

@@ -45,7 +45,8 @@ export function referenceChanges(root, baseline, snapshot) {
       const before = path.join(directory, 'before'), after = path.join(directory, 'after');
       fs.writeFileSync(before, baseline[name], { mode: 0o600 });
       fs.writeFileSync(after, content, { mode: 0o600 });
-      const result = spawnSync('git', ['--no-pager', 'diff', '--no-index', '--no-ext-diff', '--no-textconv', '--no-color', '--text', '--diff-algorithm=myers', '--unified=2', '--inter-hunk-context=0', '--output-indicator-new=+', '--output-indicator-old=-', '--output-indicator-context= ', '--', before, after], { encoding: 'utf8', timeout: 60000, maxBuffer: Math.max(1048576, Buffer.byteLength(content) * 4 + Buffer.byteLength(baseline[name]) * 4) });
+      // User git config (e.g. diff.suppressBlankEmpty) must not change line accounting.
+      const result = spawnSync('git', ['--no-pager', 'diff', '--no-index', '--no-ext-diff', '--no-textconv', '--no-color', '--text', '--diff-algorithm=myers', '--unified=2', '--inter-hunk-context=0', '--output-indicator-new=+', '--output-indicator-old=-', '--output-indicator-context= ', '--', before, after], { env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull }, encoding: 'utf8', timeout: 60000, maxBuffer: Math.max(1048576, Buffer.byteLength(content) * 4 + Buffer.byteLength(baseline[name]) * 4) });
       if (result.error) throw result.error;
       if (![0, 1].includes(result.status)) throw new Error(`Reference diff failed: ${result.stderr}`);
       const lines = content.split('\n');

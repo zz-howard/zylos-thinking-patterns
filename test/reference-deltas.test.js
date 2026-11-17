@@ -78,7 +78,7 @@ test('deletion-only edits emit no content and reused runs do not consume referen
   const baseline = captureReferences(s.env.ZYLOS_DIR);
   s.write('preferences.md', 'one\nthree\n');
   assert.equal(s.collect({ reference_baseline: baseline }).reference_changes.length, 0);
-  const source = s.collect({}); source.trace_complete = true;
+  const source = traceMaterials(s.config, {}, s.collect({}), []);
   const reused = collectMaterials(s.config, { reference_baseline: baseline }, { zylos_dir: s.env.ZYLOS_DIR, reuse_artifacts: [source] });
   assert.equal(reused.reference_snapshot, undefined);
   assert.equal(reused.reference_changes.length, 0);
@@ -140,6 +140,9 @@ test('fragments name the section above the change, ignore fenced comments and ma
   const baseline = captureReferences(s.env.ZYLOS_DIR);
   const next = [...body]; next.splice(7, 0, 'beta first'); next[13] = 'b2 changed';
   s.write('preferences.md', next.join('\n'));
+  // A user git setting that drops blank context lines must not shift line accounting.
+  fs.writeFileSync(path.join(s.root, 'gitconfig'), '[diff]\n\tsuppressBlankEmpty = true\n');
+  process.env.GIT_CONFIG_GLOBAL = path.join(s.root, 'gitconfig');
   const changes = referenceChanges(s.env.ZYLOS_DIR, baseline, captureReferences(s.env.ZYLOS_DIR));
   assert.equal(changes.length, 2);
   assert.equal(changes[0].section, '## Beta');
