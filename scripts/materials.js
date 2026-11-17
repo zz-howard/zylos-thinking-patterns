@@ -1,9 +1,10 @@
-// Shared, dependency-free material contract; copied verbatim by both components.
+// Checkpoint material collection and trace contract.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { captureReferences, referenceChanges } from './reference-deltas.js';
 
 export const MATERIAL_DEFAULTS = {
   trace_max_clues: 15, trace_context: 10, trace_max_bytes: 512000,
@@ -69,20 +70,6 @@ function memoryFiles(root, group, rows, zone) {
   if (rows.length) for (let ms = epoch(rows[0].timestamp); ms <= epoch(rows.at(-1).timestamp); ms += 3600000) dates.add(day(ms, zone));
   return [...dates].sort().map(date => path.join(base, `${date}.md`)).filter(file => fs.existsSync(file));
 }
-function changedFiles(root, since, now) {
-  const directory = path.join(root, 'memory/reference/decisions');
-  const files = [];
-  function walk(dir) {
-    if (!fs.existsSync(dir)) return;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) walk(path.join(dir, entry.name));
-      else if (entry.isFile() && entry.name.endsWith('.md')) files.push(path.join(dir, entry.name));
-    }
-  }
-  walk(directory);
-  files.push(path.join(root, 'memory/reference/preferences.md'));
-  return files.filter(file => fs.existsSync(file) && fs.statSync(file).mtimeMs > since && fs.statSync(file).mtimeMs <= now);
-}
 export function collectMaterials(config, state = {}, options = {}) {
   const now = options.now ?? Date.now();
   const zone = options.time_zone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -133,12 +120,15 @@ export function collectMaterials(config, state = {}, options = {}) {
     for (const file of memoryFiles(root, group, rows, zone)) sessions.add(file);
     inbound.push(...rows.filter(row => row.direction === 'in' && allowed(row, options) && !String(row.content ?? '').startsWith('[Scheduled Task:')).map(row => ({ ...row, content: stripWrappers(row.content) })));
   }
-  const references = ranges.length && reused.length !== ranges.length ? changedFiles(root, Date.parse(state.last_material_at ?? new Date(now - 86400000).toISOString()), now) : [];
+  const snapshot = ranges.length && reused.length !== ranges.length ? captureReferences(root) : undefined;
+  const changes = snapshot === undefined ? [] : referenceChanges(root, state.reference_baseline, snapshot);
+  const baselineNote = snapshot !== undefined && state.reference_baseline === undefined ? 'Initial reference baseline established; no reference content emitted.' : null;
+  const references = [...new Set(changes.map(change => change.file))];
   const sessionFiles = [...sessions];
   const fileReport = files => ({ count: files.length, bytes: files.reduce((n, file) => n + fs.statSync(file).size, 0), characters: files.reduce((n, file) => n + [...fs.readFileSync(file, 'utf8')].length, 0) });
   return { schema_version: 1, run_id: crypto.randomUUID(), mode: 'checkpoints', created_at: new Date(now).toISOString(), time_zone: zone, ranges, session_files: sessionFiles, reference_files: references, inbound, reused,
-    filters,
-    report: { inbound: measure(inbound), sessions: fileReport(sessionFiles), references: fileReport(references), reused_ranges: reused.length, reuse_misses: reuseMisses }, clues: [], traces: [], trace_complete: false };
+    filters, reference_snapshot: snapshot, reference_changes: changes, reference_baseline_note: baselineNote,
+    report: { inbound: measure(inbound), sessions: fileReport(sessionFiles), references: { ...measure(changes), baseline_note: baselineNote }, reused_ranges: reused.length, reuse_misses: reuseMisses }, clues: [], traces: [], trace_complete: false };
 }
 export function traceMaterials(config, state, run, clues = []) {
   const settings = { ...MATERIAL_DEFAULTS, ...config };
@@ -204,7 +194,10 @@ export function commitMaterials(state, run, completedGroups) {
     if ((next.groups[group]?.end_conversation_id ?? 0) > range.after) throw new Error('Stale material run');
     next.groups[group] = { end_conversation_id: range.end, checkpoint_id: range.checkpoint_id };
   }
-  if (run.ranges.every(range => (next.groups[range.session_group]?.end_conversation_id ?? 0) >= range.end)) next.last_material_at = run.created_at;
+  if (run.ranges.every(range => (next.groups[range.session_group]?.end_conversation_id ?? 0) >= range.end)) {
+    next.last_material_at = run.created_at;
+    if (run.reference_snapshot !== undefined) next.reference_baseline = run.reference_snapshot;
+  }
   return next;
 }
 export function saveArtifact(directory, run, retentionDays = 7) {

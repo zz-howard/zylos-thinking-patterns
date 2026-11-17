@@ -33,7 +33,7 @@ node scripts/extract.js template --lookback 24h --task daily --cron '50 23 * * *
 ## Flow
 
 1. Fetch each group's Memory Sync checkpoint-covered range, daily memory paths,
-   changed decision/preference paths and allowed-channel inbound messages.
+   changed decision/preference fragments and allowed-channel inbound messages.
 2. The background agent reads memory, then the complete inbound net; selects
    decision/correction clues by meaning; traces them in their original group.
 3. Trace includes replies under clue/context/byte limits. Deferred work persists.

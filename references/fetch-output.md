@@ -13,9 +13,9 @@ always start from the latest day.
 
 `ranges` gives each group's exclusive previous cursor and inclusive checkpoint
 end. `begin_time`/`end_time` are C4 UTC timestamps. `time_zone` selects daily
-session paths. Read `session_files`, relevant changed `reference_files`, then
+session paths. Read `session_files`, supplied `reference_changes` fragments, then
 the complete `inbound` net. `report` measures inbound count/bytes/characters,
-session/reference path counts and file bytes, and reused range count. Normal
+session file counts/bytes, reference fragment counts/characters, and reused range count. Read only a relevant original section when fragment context is insufficient. Include `reference_baseline_note` in the summary when present. Normal
 mode does not cap conversations.
 
 `patterns` retains target introspection, entry index and unchanged lint.

@@ -1,8 +1,11 @@
 # Shared Material Artifacts
 
-Both components ship the same dependency-free `scripts/materials.js`; neither
+Both components ship compatible material contracts and `reference-deltas.js`; neither
 imports the other's installed code. Thinking-patterns writes mode-0600 JSON to
 its data directory's `materials/<run UUID>.json`.
+Reference fragments use the installed Git executable's bounded-context diff,
+with external diff/text conversion disabled and temporary private files removed
+after every comparison.
 
 ## Format (schema_version 1)
 
@@ -11,7 +14,9 @@ its data directory's `materials/<run UUID>.json`.
 | `run_id`, `created_at`, `mode`, `time_zone` | UUID, ISO instant, `checkpoints`, owner's timezone |
 | `ranges` | `{session_group,after,end,checkpoint_id,begin_time,end_time}`; interval `(after,end]`; C4 times are UTC |
 | `filters` | `{channels:null or array,exclude_channels:array,exclude_scheduled_tasks:true}`; reuse requires equal filters |
-| `session_files`, `reference_files` | Paths only; no copied memory body |
+| `session_files`, `reference_files` | Session paths and index of reference paths having emitted changes |
+| `reference_changes` | `{file,kind,start_line,section?,content}` fragments: new files whole; modified current lines with two context lines and the nearest section heading; deleted/unchanged files omitted |
+| `reference_baseline_note` | Initial baseline notice when no previous successful baseline exists; no reference content is emitted on that run |
 | `inbound` | Allowed-channel inbound C4 rows with current-message bodies and bracket-prefixed first lines retained; no-pair messages unchanged |
 | `clues` | `{session_group,c4_id,kind:"decision" or "correction",source_range}` plus optional prose; queued clues retain their original range |
 | `traces` | `{clue,rows,report}`; same-group allowed-channel context including replies |
@@ -37,6 +42,15 @@ clues first. Commit advances selected ranges after trace selection, even when
 some clues were deferred. Deferred clues live in state and in the artifact's
 `deferred_clues`, independently of the original run. The next fetch collects
 new checkpoint ranges normally. `skip` advances nothing and releases the run.
+
+Each component independently saves `reference_baseline` contents in its data
+directory's state (per policy/task for thinking-patterns). Fetch captures `reference_snapshot` in the private
+artifact (never in fetch output); only the final successful non-skip commit of
+all ranges advances the baseline to those captured bytes. Partial, failed and
+skipped runs retain the previous baseline. Fully reused runs do not consume
+reference changes. Content comparison ignores mtimes. `report.references`
+counts emitted fragments and their content characters, rather than full files;
+its `baseline_note` also preserves initialization in the run summary/log.
 
 Trace clue and byte limits apply cumulatively to one run. Further calls cannot
 reset them. The first trace is accepted even when it exceeds the byte limit,

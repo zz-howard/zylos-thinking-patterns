@@ -284,7 +284,8 @@ function commandFetch(args) {
     }
   }
   const ready = run.ranges.length > 0 || scope.pending_clues?.length > 0;
-  outputJson({ status: ready ? 'ready' : 'skip', reason: ready ? null : 'no_checkpoint_progress', ...run, completed_groups: scope.completed_groups ?? [], ...policySummary(policy), filters: run.filters, methodology_file: METHODOLOGY_PATH, state_file: STATE_PATH, artifact_file: ready ? materialFile(run.run_id) : null });
+  const { reference_snapshot, ...publicRun } = run;
+  outputJson({ status: ready ? 'ready' : 'skip', reason: ready ? null : 'no_checkpoint_progress', ...publicRun, completed_groups: scope.completed_groups ?? [], ...policySummary(policy), filters: run.filters, methodology_file: METHODOLOGY_PATH, state_file: STATE_PATH, artifact_file: ready ? materialFile(run.run_id) : null });
 }
 function commandTrace(args) {
   const run = readRun(optional(args, 'run'));
