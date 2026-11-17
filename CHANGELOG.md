@@ -5,7 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-17
+
+### Actions After Upgrading
+- None required. The first run after upgrading establishes the reference baseline and sends no reference content; later runs send only changed fragments.
 
 ### Changed
 - Shared `materials.js` resynced with identity-reflection: reuse is per thread once clue selection ran (`clue_selection_unfinished` otherwise); reused traces do not consume the reflection trace allowance.
