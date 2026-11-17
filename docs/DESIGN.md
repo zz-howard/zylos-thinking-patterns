@@ -22,10 +22,11 @@ confirmation, notifications and append-only boundaries remain owner policy.
    existing files under memory. A busy or conflicting write blocks progress;
    missing files, outside-memory targets and old Core report direct-write mode.
 7. Deferred clues and the active run persist. Commit advances only completed
-   ranges. Identity-reflection can reuse matching completed artifacts.
+   ranges. Identity-reflection can reuse matching artifacts per thread once clue selection ran.
 
-`scripts/materials.js` is dependency-free and copied verbatim to
-identity-reflection, with no runtime component dependency. See the artifact
+`scripts/materials.js` and `scripts/reference-deltas.js` are copied verbatim to
+identity-reflection, with no runtime component dependency; reference fragments
+need the installed git executable. See the artifact
 contract in [materials.md](../references/materials.md).
 
 ## CLI Boundary

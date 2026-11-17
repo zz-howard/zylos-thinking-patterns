@@ -162,8 +162,9 @@ test('completed matching artifacts reuse corrections without reading raw materia
   const mismatch = collectMaterials(s.config, {}, { ...s.options, exclude_channels: ['telegram'], reuse_artifacts: [run] });
   assert.equal(mismatch.report.reused_ranges, 0);
   assert.ok(mismatch.report.reuse_misses.every(miss => miss.reason === 'filters_mismatch'));
-  const unfinished = collectMaterials(s.config, {}, { ...s.options, reuse_artifacts: [{ ...run, trace_complete: false }] });
-  assert.ok(unfinished.report.reuse_misses.every(miss => miss.reason === 'thinking_patterns_incomplete'));
+  const unfinished = collectMaterials(s.config, {}, { ...s.options, reuse_artifacts: [{ ...run, trace_report: undefined }] });
+  assert.equal(unfinished.report.reuse_misses.length, 2);
+  assert.ok(unfinished.report.reuse_misses.every(miss => miss.reason === 'clue_selection_unfinished'));
   const old = structuredClone(run);
   delete old.filters.exclude_scheduled_tasks;
   const oldFilters = collectMaterials(s.config, {}, { ...s.options, reuse_artifacts: [old] });
@@ -274,10 +275,9 @@ test('a range spanning several pages reads every id across page boundaries', t =
   assert.equal(ids.size, 1200);
   assert.ok(ids.has(500) && ids.has(1000));
 });
-test('an artifact with unfinished tracing is never reused', t => {
+test('an artifact whose clue selection has not run is never reused', t => {
   const s = setup(t), run = collectMaterials(s.config, {}, s.options);
-  traceMaterials(s.config, {}, run, []);
-  const unfinished = collectMaterials(s.config, {}, { ...s.options, reuse_artifacts: [{ ...run, trace_complete: false }] });
+  const unfinished = collectMaterials(s.config, {}, { ...s.options, reuse_artifacts: [run] });
   assert.equal(unfinished.report.reused_ranges, 0);
   assert.equal(unfinished.report.reuse_misses.length, 2);
 });

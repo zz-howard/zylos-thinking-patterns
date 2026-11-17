@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Shared `materials.js` resynced with identity-reflection: reuse is per thread once clue selection ran (`clue_selection_unfinished` otherwise); reused traces do not consume the reflection trace allowance.
+- Reference fragments mark `changed_lines` and name the section above the first change, ignoring fenced code; user git config no longer affects the diff. State is written owner-only (0600) and `status` reports reference baselines by size only.
+- Send captured reference changes with small context instead of whole changed files. Initialize independent policy/task baselines without emitting content, advance snapshots only after successful full commits, and measure emitted fragment volume.
+
 ## [0.3.0] - 2026-11-17
 
 ### Actions After Upgrading

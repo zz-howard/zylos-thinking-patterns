@@ -319,7 +319,8 @@ export function atomicWriteJson(filePath, value) {
   ensureDir(path.dirname(filePath));
   const payload = `${JSON.stringify(value, null, 2)}\n`;
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmpPath, payload);
+  // Component state can hold copies of private memory files (reference baselines).
+  fs.writeFileSync(tmpPath, payload, { mode: 0o600 });
   fs.renameSync(tmpPath, filePath);
 }
 
