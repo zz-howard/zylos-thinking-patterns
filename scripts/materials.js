@@ -117,7 +117,8 @@ export function collectMaterials(config, state = {}, options = {}) {
     }
     // A checkpoint between producer and consumer runs extends the range: reuse
     // the producer's longest matching prefix and collect only the newer tail.
-    const prefix = (options.reuse_artifacts ?? []).filter(a => a.trace_report && JSON.stringify(a.filters) === JSON.stringify(filters))
+    // A first run keeps the bootstrap time window instead.
+    const prefix = previous.end_conversation_id !== undefined && (options.reuse_artifacts ?? []).filter(a => a.trace_report && JSON.stringify(a.filters) === JSON.stringify(filters))
       .flatMap(a => (a.ranges ?? []).filter(r => r.session_group === group && r.after === after && Number.isSafeInteger(r.end) && r.end > after && r.end < end).map(source => ({ a, source })))
       .reduce((best, item) => !best || item.source.end > best.source.end ? item : best, null);
     if (prefix) {
