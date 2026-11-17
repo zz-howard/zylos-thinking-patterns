@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Reference fragments mark `changed_lines` and name the section above the first change, ignoring fenced code. State is written owner-only (0600) and `status` reports reference baselines by size only.
 - Send captured reference changes with small context instead of whole changed files. Initialize independent policy/task baselines without emitting content, advance snapshots only after successful full commits, and measure emitted fragment volume.
 
 ## [0.3.0] - 2026-11-17

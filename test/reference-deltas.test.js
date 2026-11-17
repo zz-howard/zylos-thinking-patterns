@@ -108,6 +108,11 @@ test('product fetch hides snapshots and skipped or rejected commits preserve the
   invoke(['trace', '--run', fresh.run_id]);
   invoke(['commit', '--run', fresh.run_id, '--result', 'no_change']);
   assert.equal(state().material_scopes['default:daily'].reference_baseline['memory/reference/preferences.md'], 'private baseline body\n');
+  // The baseline copies private memory: state stays owner-only and status reports size only.
+  assert.equal(fs.statSync(path.join(s.env.ZYLOS_DATA_DIR, 'state.json')).mode & 0o777, 0o600);
+  const status = invoke(['status']);
+  assert.ok(!JSON.stringify(status).includes('private baseline body'));
+  assert.deepEqual(status.state.material_scopes['default:daily'].reference_baseline, { files: 1, characters: 22 });
 });
 
 test('global checkpoints and independent baselines preserve separate reference progress', t => {
@@ -126,4 +131,20 @@ test('global checkpoints and independent baselines preserve separate reference p
   assert.match(next.reference_changes[0].content, /second/);
   assert.equal(s.collect({}).reference_changes.length, 0);
   assert.equal(state.reference_baseline['memory/reference/preferences.md'], 'first\n');
+});
+
+test('fragments name the section above the change, ignore fenced comments and mark changed lines', t => {
+  const s = setup(t);
+  const body = ['# Prefs', '', '## Alpha', 'a1', 'a2', '', '## Beta', 'b1', '```bash', '# install deps', 'run it', '```', 'b2', 'b3', ''];
+  s.write('preferences.md', body.join('\n'));
+  const baseline = captureReferences(s.env.ZYLOS_DIR);
+  const next = [...body]; next.splice(7, 0, 'beta first'); next[13] = 'b2 changed';
+  s.write('preferences.md', next.join('\n'));
+  const changes = referenceChanges(s.env.ZYLOS_DIR, baseline, captureReferences(s.env.ZYLOS_DIR));
+  assert.equal(changes.length, 2);
+  assert.equal(changes[0].section, '## Beta');
+  assert.deepEqual(changes[0].changed_lines, [8]);
+  assert.equal(changes[1].section, '## Beta');
+  assert.deepEqual(changes[1].changed_lines, [14]);
+  for (const change of changes) for (const line of change.changed_lines) assert.equal(change.content.split('\n')[line - change.start_line], next[line - 1]);
 });

@@ -15,7 +15,7 @@ after every comparison.
 | `ranges` | `{session_group,after,end,checkpoint_id,begin_time,end_time}`; interval `(after,end]`; C4 times are UTC |
 | `filters` | `{channels:null or array,exclude_channels:array,exclude_scheduled_tasks:true}`; reuse requires equal filters |
 | `session_files`, `reference_files` | Session paths and index of reference paths having emitted changes |
-| `reference_changes` | `{file,kind,start_line,section?,content}` fragments: new files whole; modified current lines with two context lines and the nearest section heading; deleted/unchanged files omitted |
+| `reference_changes` | `{file,kind,start_line,changed_lines?,section?,content}` fragments: new files whole; modified current lines with two context lines, `changed_lines` (1-based current line numbers that are new or edited; the rest is context) and the nearest section heading above the first change, ignoring fenced code blocks; deleted/unchanged files and in-file deletions omitted |
 | `reference_baseline_note` | Initial baseline notice when no previous successful baseline exists; no reference content is emitted on that run |
 | `inbound` | Allowed-channel inbound C4 rows with current-message bodies and bracket-prefixed first lines retained; no-pair messages unchanged |
 | `clues` | `{session_group,c4_id,kind:"decision" or "correction",source_range}` plus optional prose; queued clues retain their original range |
@@ -51,6 +51,8 @@ skipped runs retain the previous baseline. Fully reused runs do not consume
 reference changes. Content comparison ignores mtimes. `report.references`
 counts emitted fragments and their content characters, rather than full files;
 its `baseline_note` also preserves initialization in the run summary/log.
+The state file is written owner-only (0600) because the baseline copies private
+memory files; `status` reports each baseline's file and character counts only.
 
 Trace clue and byte limits apply cumulatively to one run. Further calls cannot
 reset them. The first trace is accepted even when it exceeds the byte limit,

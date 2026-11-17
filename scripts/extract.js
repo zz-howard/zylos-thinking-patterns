@@ -408,6 +408,15 @@ function commandInspect(args) {
   outputJson({ status: 'ok', ...policySummary(policy), methodology_file: METHODOLOGY_PATH });
 }
 
+// Reference baselines hold full file copies; status reports only their size.
+function summarizeBaselines(state) {
+  const scopes = Object.fromEntries(Object.entries(state.material_scopes ?? {}).map(([key, scope]) => {
+    if (scope?.reference_baseline === undefined) return [key, scope];
+    const { reference_baseline: baseline, ...rest } = scope;
+    return [key, { ...rest, reference_baseline: { files: Object.keys(baseline).length, characters: Object.values(baseline).reduce((n, text) => n + [...text].length, 0) } }];
+  }));
+  return state.material_scopes ? { ...state, material_scopes: scopes } : state;
+}
 function commandStatus(args) {
   const config = loadConfig();
   const policy = readPolicy(normalizePolicyName(args.policy));
@@ -416,7 +425,7 @@ function commandStatus(args) {
     config_file: CONFIG_PATH,
     config,
     state_file: STATE_PATH,
-    state: loadState(),
+    state: summarizeBaselines(loadState()),
     ...policySummary(policy)
   });
 }
